@@ -1,0 +1,26 @@
+services:
+  remindarr:
+    build: .
+    image: remindarr:latest
+    container_name: remindarr
+    restart: unless-stopped
+
+    env_file: .env
+
+    environment:
+      # Absolute path -- note the four slashes after the scheme.
+      REMINDARR_DATABASE_URL: sqlite+aiosqlite:////data/remindarr.db
+
+    volumes:
+      # Bind mount rather than a named volume so the database is a file you can
+      # see, copy, and back up with the rest of the homelab.
+      - ./data:/data
+
+    # No ports section, deliberately: both adapters connect outbound, so
+    # nothing needs to reach this container.
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
