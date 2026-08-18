@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="805" viewBox="0 0 900 805" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="13.5">
+<rect x="0" y="0" width="900" height="805" rx="10" fill="#0d1117" stroke="#30363d"/>
+<path d="M0 10 a10 10 0 0 1 10 -10 h880 a10 10 0 0 1 10 10 v28 h-900 z" fill="#161b22"/>
+<line x1="0" y1="38" x2="900" y2="38" stroke="#30363d"/>
+<circle cx="22" cy="19" r="5.5" fill="#ff5f56"/>
+<circle cx="40" cy="19" r="5.5" fill="#ffbd2e"/>
+<circle cx="58" cy="19" r="5.5" fill="#27c93f"/>
+<text x="450" y="24" fill="#6e7681" text-anchor="middle" font-size="12">remindarr — telegram</text>
+<text x="22" y="66" fill="#6e7681">$ remindarr</text>
+<text x="22" y="86" fill="#6e7681">  remindarr.ready  capture=[telegram, discord]  delivery=[telegram, discord]</text>
+<text x="22" y="128" fill="#79c0ff" font-weight="600">you</text>
+<text x="56" y="128" fill="#6e7681">&#9656;</text>
+<text x="74" y="128" fill="#e6edf3">call the dentist tomorrow at 9</text>
+<text x="22" y="150" fill="#3fb950" font-weight="600">bot</text>
+<text x="56" y="150" fill="#6e7681">&#9656;</text>
+<text x="74" y="150" fill="#c9d1d9">Got it — “call the dentist” tomorrow at 09:00 (in 22 hours).</text>
+<text x="74" y="170" fill="#6e7681">id 1</text>
+<text x="22" y="212" fill="#79c0ff" font-weight="600">you</text>
+<text x="56" y="212" fill="#6e7681">&#9656;</text>
+<text x="74" y="212" fill="#e6edf3">remind me to check the burn-in in 45 minutes</text>
+<text x="22" y="234" fill="#3fb950" font-weight="600">bot</text>
+<text x="56" y="234" fill="#6e7681">&#9656;</text>
+<text x="74" y="234" fill="#c9d1d9">Got it — “check the burn-in” today at 11:15 (in 45 minutes).</text>
+<text x="74" y="254" fill="#6e7681">id 2</text>
+<text x="22" y="296" fill="#79c0ff" font-weight="600">you</text>
+<text x="56" y="296" fill="#6e7681">&#9656;</text>
+<text x="74" y="296" fill="#e6edf3">stand-up call at 9</text>
+<text x="22" y="318" fill="#3fb950" font-weight="600">bot</text>
+<text x="56" y="318" fill="#6e7681">&#9656;</text>
+<text x="74" y="318" fill="#c9d1d9">Got it — “stand-up call” today at 21:00 (in 10 hours).</text>
+<text x="74" y="338" fill="#6e7681">id 3</text>
+<text x="74" y="360" fill="#8b949e">note: read “9” as 21:00</text>
+<text x="22" y="402" fill="#79c0ff" font-weight="600">you</text>
+<text x="56" y="402" fill="#6e7681">&#9656;</text>
+<text x="74" y="402" fill="#e6edf3">call mom about flight 320</text>
+<text x="22" y="422" fill="#3fb950" font-weight="600">bot</text>
+<text x="56" y="422" fill="#6e7681">&#9656;</text>
+<text x="74" y="422" fill="#c9d1d9">I could not find a time in that.</text>
+<text x="74" y="444" fill="#6e7681">Try something like “call mom tomorrow at 9”, or /help.</text>
+<line x1="22" y1="478" x2="400" y2="478" stroke="#30363d"/>
+<line x1="500" y1="478" x2="878" y2="478" stroke="#30363d"/>
+<text x="450" y="482" fill="#6e7681" text-anchor="middle" font-size="11.5" font-style="italic">time passes</text>
+<text x="22" y="528" fill="#d29922" font-weight="600">PUSH</text>
+<text x="74" y="528" fill="#6e7681">Tue 11:16   → telegram</text>
+<text x="74" y="548" fill="#d29922">⏰ check the burn-in</text>
+<line x1="22" y1="583" x2="357" y2="583" stroke="#30363d"/>
+<line x1="543" y1="583" x2="878" y2="583" stroke="#30363d"/>
+<text x="450" y="588" fill="#6e7681" text-anchor="middle" font-size="11.5" font-style="italic">process down for 3 days</text>
+<text x="22" y="632" fill="#d29922" font-weight="600">PUSH</text>
+<text x="74" y="632" fill="#6e7681">Fri 11:16   → telegram</text>
+<text x="74" y="654" fill="#d29922">⏰ stand-up call</text>
+<text x="74" y="674" fill="#d29922">(this was due 2 days ago — delivered late)</text>
+<text x="22" y="716" fill="#d29922" font-weight="600">PUSH</text>
+<text x="74" y="716" fill="#6e7681">Fri 11:16   → telegram</text>
+<text x="74" y="738" fill="#d29922">⏰ call the dentist</text>
+<text x="74" y="758" fill="#d29922">(this was due 2 days ago — delivered late)</text>
+</svg>
