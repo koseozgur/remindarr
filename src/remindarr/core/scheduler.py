@@ -106,6 +106,11 @@ class Scheduler:
             message = OutgoingMessage(
                 route=Route(reminder.delivery_platform, reminder.delivery_address),
                 text=self._render(reminder, now),
+                fallback=(
+                    Route(reminder.delivery_platform, reminder.fallback_address)
+                    if reminder.fallback_address is not None
+                    else None
+                ),
                 idempotency_key=idempotency_key(reminder),
             )
             try:

@@ -11,7 +11,7 @@
   <img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white">
   <img alt="Typed: mypy strict" src="https://img.shields.io/badge/mypy-strict-2A6DB2">
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/badge/lint-ruff-D7FF64"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-202-3fb950">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-282-3fb950">
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
@@ -22,9 +22,12 @@
 
 <p align="center"><sub>Generated from the real code — see <a href="#how-it-works">How it works</a>.</sub></p>
 
-**Status: v0, working end to end.** Telegram and Discord, one-shot reminders,
-SQLite. LINE is implemented and tested against a fake LINE API, but has not yet
-made a round trip through the real one. See [Roadmap](#roadmap) for what is deliberately not here yet.
+**Status: v0, in daily use.** One-shot reminders on LINE, Discord and
+Telegram, SQLite, an allow-list, and cross-app delivery (set it on LINE, get it
+on Discord). **LINE and Discord were verified live on 2026-11-08**, including
+the allow-list's refusal path. **Telegram is implemented and tested but has
+never made a real round trip.** See [Roadmap](#roadmap) for what is
+deliberately not here yet.
 
 ---
 
@@ -92,6 +95,11 @@ symmetry would have to be unpicked to express that.
 
 The core never sees a platform object. Adapters translate to
 `IncomingMessage` / `OutgoingMessage` at the boundary.
+
+The bet pays off concretely: because a reminder records where to deliver
+separately from where it was set, it can be captured on one app and delivered
+on another. Capture on LINE, where replies are free; deliver on Discord, where
+pushes are unlimited. See [Cross-app delivery](#cross-app-delivery).
 
 ### Inbound ports: none, unless you enable LINE
 
@@ -201,6 +209,10 @@ When the month's quota runs out, LINE refuses pushes, and remindarr marks the
 affected reminders failed (with "LINE monthly message limit reached") rather
 than retrying into a wall. There is no warning before that point yet.
 
+The way around the cap is not to push on LINE at all: set reminders on LINE
+and have them [delivered on Discord](#cross-app-delivery). Every LINE message
+is then a free reply.
+
 #### Things LINE does not tell you
 
 - **A user who blocked the account is undetectable.** LINE answers a push to
@@ -275,6 +287,90 @@ REMINDARR_ALLOWED_USERS=line:U4af4980629..., telegram:123456789, discord:9876543
 - A refused user gets no subscriber row, no reminder, and no command — not
   even `/help`.
 - It is configuration: change it and restart. There are no admin commands.
+- Linking identities into a person ([below](#cross-app-delivery)) grants no
+  access. Every identity in `REMINDARR_PEOPLE` must also be in the allow-list,
+  or startup fails and says which one is missing.
+
+### Cross-app delivery
+
+By default a reminder arrives where you set it. To set reminders on one app
+and get them on another, tell remindarr which identities are one person and
+where that person wants them:
+
+```bash
+REMINDARR_ALLOWED_USERS=line:U4af4980629..., discord:987654321
+REMINDARR_PEOPLE=ozgur = line:U4af4980629..., discord:987654321 > discord
+```
+
+Now a reminder set in your one-to-one LINE chat arrives as a Discord DM, and
+the confirmation says so:
+
+```
+Got it — “take the bins out” tomorrow at 09:00 (in 14 hours).
+id 7
+It'll arrive as a direct message on Discord.
+```
+
+**Why you would want this:** on LINE's free plan, replies are free and pushes
+are capped at 200 a month ([details](#the-quota-and-what-it-costs-you)). If
+you capture on LINE and deliver on Discord, every LINE message is a free
+reply, and the cap stops mattering.
+
+**Syntax.** People are separated by `;`. Each is
+`name = platform:id, platform:id`, optionally followed by `> app`, the app
+reminders are delivered on. Names are lowercase letters, digits, `-` and `_`.
+Without `> app`, reminders still arrive where they were set. These are
+startup errors, not silent misreadings:
+
+- an identity that is in two people, or not in the allow-list;
+- two identities on one platform for the same person;
+- a default app the person has no identity on, or one that is not enabled.
+
+**The default applies to one-to-one chats only.** A reminder set in a LINE or
+Telegram group goes back to that group. A group reminder is for the group.
+
+**Discord is the exception: reminders always arrive by DM.** A reminder set in
+a server channel goes to the setter's DMs, and the reply in the channel says
+*I'll DM you when it's due.* If the DM is refused (the bot shares no server
+with you, or your DMs from server members are off), it is delivered to the
+channel it was set in instead, with a mention of you so you are still
+notified. If that fails too, the reminder is marked failed and says why.
+
+**Per reminder: `@app`.** Put `@discord`, `@line` or `@telegram` anywhere in
+the message to have that one reminder delivered to you directly on that app.
+That includes from a group, and it overrides your default:
+
+```
+call mum tomorrow at 9 @line
+```
+
+The `@` is deliberate. "post the update on discord tomorrow" is a real task,
+and remindarr will never read plain words as routing. That is the same rule
+the time parser follows: never silently eat part of the task. So:
+
+- only `@line`, `@discord` and `@telegram` are acted on; any other `@word`
+  (`email @john about the invoice tomorrow`) stays in the reminder as written;
+- for the same reason, a person in `REMINDARR_PEOPLE` cannot be named after
+  an app;
+- two apps in one message, an app you have no linked identity on, or an app
+  that is not enabled are all refused, saying why.
+
+`/list` marks reminders that will arrive somewhere other than the current chat
+(`#7 take the bins out — tomorrow at 09:00 (in 14 hours) → Discord DM`).
+
+Delivering on Discord to someone who has not written from Discord opens a DM
+with them. That needs the bot to share a server with them and their DMs from
+server members to be on. A cross-app reminder has no channel to fall back
+to, so if the DM is refused it fails permanently, with a message saying so,
+and is not retried.
+
+**Nothing in a reminder can ping anyone.** Reminder text is whatever someone
+typed. On Discord every message is sent with mentions disabled, so
+`@everyone`, `@here`, a role or a user mention in the text is inert. The one
+exception is the channel fallback's mention of the person who set it.
+
+One limit: each app's identity still has its own reminders. `/list` and
+`/cancel` on Discord do not see what you set on LINE.
 
 ---
 
@@ -294,10 +390,13 @@ Commands:
 
 | | |
 |---|---|
-| `/list` | what is pending |
-| `/cancel <id>` | drop one |
+| `/list` | what is pending, as `#id text — when` |
+| `/cancel <id>` | drop one (`/cancel 3` or `/cancel #3`) |
 | `/tz <zone>` | set your timezone, IANA name (`/tz Asia/Tokyo`) |
 | `/help` | the above |
+
+Add `@line`, `@discord` or `@telegram` to a reminder to have it delivered on
+that app; see [Cross-app delivery](#cross-app-delivery).
 
 ### What the parser accepts
 
@@ -346,6 +445,7 @@ All via environment or `.env`, prefix `REMINDARR_`:
 | `REMINDARR_TELEGRAM_TOKEN` | — | enables Telegram |
 | `REMINDARR_DISCORD_TOKEN` | — | enables Discord |
 | `REMINDARR_ALLOWED_USERS` | — (nobody) | who may use the bot, `platform:user_id,…` ([details](#access-control)) |
+| `REMINDARR_PEOPLE` | — | identities that are one person, and where they get reminders ([details](#cross-app-delivery)) |
 | `REMINDARR_LINE_CHANNEL_SECRET` | — | with the token below, enables LINE |
 | `REMINDARR_LINE_CHANNEL_ACCESS_TOKEN` | — | with the secret above, enables LINE |
 | `REMINDARR_WEBHOOK_HOST` | `0.0.0.0` | webhook listen address (LINE only) |
@@ -417,7 +517,10 @@ The demo image at the top is generated by driving the real `Router` and
 actually does.
 
 No Alembic yet. The schema is young enough that a bad migration costs more than
-a rebuild. When it stabilises and there is data worth preserving, that is the
+a rebuild. When a version adds a column (cross-app delivery added
+`reminders.fallback_address`), an older database is refused at startup with a
+message naming the missing column. Back it up if it matters, then delete it
+and start fresh. When it stabilises and there is data worth preserving, that is the
 moment to add migrations — not before.
 
 ---
@@ -426,10 +529,8 @@ moment to add migrations — not before.
 
 **Next up**
 
-- **LINE, for real.** The adapter is built — the differentiator, dominant in
-  Japan, skipped by most Western self-hosted tools. Still to come: a first
-  real round trip, deployment ingress, and a warning before the monthly push
-  quota runs out.
+- **A warning before LINE's monthly push quota runs out**, for anyone who
+  still delivers on LINE.
 - **Recurring reminders.** The schema has a reserved `recurrence` column; v0
   writes `NULL` and never reads it.
 
@@ -444,9 +545,8 @@ moment to add migrations — not before.
 
 - Native mobile app, deliberately simple, retro-leaning.
 - Slack, ntfy, email, SMS delivery adapters.
-- Cross-platform identity linking (capture on Telegram, deliver to Discord).
-  The data model already separates the two; what is missing is the UX for
-  proving both accounts are you.
+- One `/list` across a person's identities, so you can see and cancel on
+  Discord what you set on LINE.
 
 ### WhatsApp: outbound only, and not soon
 

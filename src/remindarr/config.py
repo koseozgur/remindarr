@@ -8,7 +8,9 @@ startup error rather than a silently disabled platform.
 
 from __future__ import annotations
 
+import re
 import zoneinfo
+from dataclasses import dataclass
 from typing import Annotated
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -16,6 +18,57 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 KNOWN_PLATFORMS = frozenset({"telegram", "discord", "line"})
 """Platform names as adapters report them in ``Sender.platform``."""
+
+PLATFORM_NAMES = {"telegram": "Telegram", "discord": "Discord", "line": "LINE"}
+"""How a platform is spelled to humans, in replies."""
+
+_PERSON_NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
+
+
+def parse_identity(entry: str, *, field: str) -> str:
+    """``" LINE : U1234 "`` -> ``"line:U1234"``, or a ValueError naming ``field``.
+
+    The platform is case-insensitive (normalised to lowercase, as adapters
+    report it); the user id is kept exactly, because LINE ids are
+    case-sensitive. Only the first colon separates: ids are opaque.
+    """
+    platform, sep, user_id = entry.partition(":")
+    platform, user_id = platform.strip().lower(), user_id.strip()
+    if not sep or not platform or not user_id or any(c.isspace() for c in user_id):
+        raise ValueError(
+            f"{field} entry {entry.strip()!r} is not platform:user_id "
+            "(e.g. line:U1234abcd or discord:123456789)"
+        )
+    if platform not in KNOWN_PLATFORMS:
+        known = ", ".join(sorted(KNOWN_PLATFORMS))
+        raise ValueError(
+            f"{field} entry {entry.strip()!r} has unknown platform {platform!r} (known: {known})"
+        )
+    return f"{platform}:{user_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class Person:
+    """One human's identities across platforms, as the owner declared them.
+
+    Declared in config rather than claimed in chat: the owner is the only one
+    who edits config, so there is no "prove you own both accounts" problem.
+    """
+
+    name: str
+    identities: frozenset[str]
+    """``platform:user_id`` entries, at most one per platform."""
+
+    deliver_on: str | None = None
+    """Platform that reminders set in a one-to-one chat are delivered on.
+    ``None`` means "wherever it was set"."""
+
+    def user_id_on(self, platform: str) -> str | None:
+        for identity in self.identities:
+            p, _, user_id = identity.partition(":")
+            if p == platform:
+                return user_id
+        return None
 
 
 class Settings(BaseSettings):
@@ -62,6 +115,10 @@ class Settings(BaseSettings):
     owner's push quota. ``NoDecode`` because pydantic-settings would otherwise
     parse the env value as JSON rather than a comma-separated list."""
 
+    people: Annotated[tuple[Person, ...], NoDecode] = ()
+    """Which identities are one person, and where they want reminders. See
+    :meth:`_parse_people` for the syntax."""
+
     log_level: str = "INFO"
     log_json: bool = False
 
@@ -79,9 +136,8 @@ class Settings(BaseSettings):
     def _parse_allowed_users(cls, v: object) -> object:
         """``line:U1234, discord:5678`` -> ``{"line:U1234", "discord:5678"}``.
 
-        The platform is case-insensitive (normalised to lowercase, as adapters
-        report it); the user id is kept exactly, because LINE ids are
-        case-sensitive. Empty entries, e.g. from a trailing comma, are skipped.
+        See :func:`parse_identity` for case handling. Empty entries, e.g. from
+        a trailing comma, are skipped.
         """
         if v is None:
             return frozenset()
@@ -92,26 +148,75 @@ class Settings(BaseSettings):
         else:
             return v  # let pydantic reject it with its own message
 
-        entries: set[str] = set()
-        for item in raw:
-            entry = str(item).strip()
-            if not entry:
+        return frozenset(
+            parse_identity(str(item), field="allowed_users") for item in raw if str(item).strip()
+        )
+
+    @field_validator("people", mode="before")
+    @classmethod
+    def _parse_people(cls, v: object) -> object:
+        """``ozgur = line:U1, discord:2 > discord; mum = line:U3``.
+
+        People are separated by ``;``. Each is ``name = identity, identity``,
+        optionally followed by ``> platform``: the app that person's reminders
+        are delivered on when set in a one-to-one chat. The platform must be
+        one the person has an identity on. Names are case-insensitive.
+        """
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return ()
+        if not isinstance(v, str):
+            return v  # already-built Persons (tests), or let pydantic reject it
+
+        people: list[Person] = []
+        owner: dict[str, str] = {}  # identity -> person name
+        for chunk in v.split(";"):
+            if not chunk.strip():
                 continue
-            platform, sep, user_id = entry.partition(":")
-            platform, user_id = platform.strip().lower(), user_id.strip()
-            if not sep or not platform or not user_id or any(c.isspace() for c in user_id):
+            name, sep, rest = chunk.partition("=")
+            name = name.strip().lower()
+            if not sep or not _PERSON_NAME.fullmatch(name):
                 raise ValueError(
-                    f"allowed_users entry {entry!r} is not platform:user_id "
-                    "(e.g. line:U1234abcd or discord:123456789)"
+                    f"people entry {chunk.strip()!r} is not 'name = platform:id, ...' "
+                    "(names: lowercase letters, digits, - and _)"
                 )
-            if platform not in KNOWN_PLATFORMS:
-                known = ", ".join(sorted(KNOWN_PLATFORMS))
-                raise ValueError(
-                    f"allowed_users entry {entry!r} has unknown platform {platform!r} "
-                    f"(known: {known})"
-                )
-            entries.add(f"{platform}:{user_id}")
-        return frozenset(entries)
+            if name in KNOWN_PLATFORMS:
+                # Reserved: "@line" routes to an app, so "@name" can only ever
+                # mean a person if no person shares an app's name.
+                raise ValueError(f"people: {name!r} is a platform name and cannot be a person")
+            if any(p.name == name for p in people):
+                raise ValueError(f"people: {name!r} is defined twice")
+
+            idents_part, arrow, deliver = rest.partition(">")
+            identities: set[str] = set()
+            for raw in idents_part.split(","):
+                if not raw.strip():
+                    continue
+                identity = parse_identity(raw, field=f"people ({name})")
+                platform = identity.partition(":")[0]
+                if any(i.startswith(f"{platform}:") for i in identities):
+                    raise ValueError(f"people: {name!r} has two {platform} identities")
+                if identity in owner:
+                    raise ValueError(
+                        f"people: {identity} is in both {owner[identity]!r} and {name!r}; "
+                        "an identity can belong to only one person"
+                    )
+                owner[identity] = name
+                identities.add(identity)
+            if not identities:
+                raise ValueError(f"people: {name!r} has no identities")
+
+            deliver_on: str | None = None
+            if arrow:
+                deliver_on = deliver.strip().lower()
+                if not any(i.startswith(f"{deliver_on}:") for i in identities):
+                    raise ValueError(
+                        f"people: {name!r} delivers on {deliver_on!r} but has no "
+                        f"{deliver_on} identity"
+                        if deliver_on in KNOWN_PLATFORMS
+                        else f"people: {name!r} delivers on unknown platform {deliver_on!r}"
+                    )
+            people.append(Person(name, frozenset(identities), deliver_on))
+        return tuple(people)
 
     @field_validator("line_webhook_path")
     @classmethod
@@ -155,6 +260,26 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _people_are_allowed_and_deliverable(self) -> Settings:
+        """Being in a person does not grant access: the allow-list stays the one
+        place that decides who may use the bot. And a default delivery app
+        that is not running would silently strand every reminder."""
+        enabled = self.enabled_platforms
+        for person in self.people:
+            for identity in sorted(person.identities):
+                if identity not in self.allowed_users:
+                    raise ValueError(
+                        f"people: {person.name!r} includes {identity}, which is not in "
+                        "REMINDARR_ALLOWED_USERS (being in a person does not grant access)"
+                    )
+            if person.deliver_on is not None and person.deliver_on not in enabled:
+                raise ValueError(
+                    f"people: {person.name!r} delivers on {person.deliver_on}, "
+                    "which is not enabled (no token configured)"
+                )
+        return self
+
     @property
     def enabled_platforms(self) -> list[str]:
         enabled = []
@@ -168,6 +293,10 @@ class Settings(BaseSettings):
 
     def is_allowed(self, platform: str, user_id: str) -> bool:
         return f"{platform.lower()}:{user_id}" in self.allowed_users
+
+    def person_of(self, platform: str, user_id: str) -> Person | None:
+        identity = f"{platform.lower()}:{user_id}"
+        return next((p for p in self.people if identity in p.identities), None)
 
     @property
     def line_enabled(self) -> bool:

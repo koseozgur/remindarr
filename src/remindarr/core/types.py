@@ -11,6 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+USER_PREFIX = "user:"
+"""Route address prefix for "this user's one-to-one chat"; see :class:`Route`."""
+
 
 @dataclass(frozen=True, slots=True)
 class Route:
@@ -19,10 +22,23 @@ class Route:
     ``address`` is whatever that platform uses to reach a conversation -- a
     Telegram chat id, a Discord channel id. It is deliberately a string: every
     platform spells these differently and the core has no business caring.
+
+    One form is shared: ``user:<user_id>`` means "that user's one-to-one chat
+    on this platform", for delivering somewhere the user has not written from.
+    Each delivery adapter resolves it its own way (on Discord, by opening a
+    DM), so the core can ask for it without knowing how.
     """
 
     platform: str
     address: str
+
+    @classmethod
+    def direct_to(cls, platform: str, user_id: str) -> Route:
+        return cls(platform, f"{USER_PREFIX}{user_id}")
+
+    @property
+    def is_direct_address(self) -> bool:
+        return self.address.startswith(USER_PREFIX)
 
     def __str__(self) -> str:
         return f"{self.platform}:{self.address}"
@@ -46,6 +62,17 @@ class IncomingMessage:
     text: str
     received_at: datetime
 
+    direct: bool = False
+    """True in a one-to-one chat with the bot (LINE 1:1, Discord DM, Telegram
+    private chat). Defaults to False so an adapter that forgets to say gets
+    the conservative group behaviour: delivery stays where it was set."""
+
+    deliver_privately: bool = False
+    """The adapter asks for reminders set in this (shared) chat to go to the
+    sender's 1:1 chat instead, with this chat as the fallback if that is
+    refused. Discord sets it for server channels; a platform where a group
+    reminder is for the group leaves it False."""
+
 
 @dataclass(frozen=True, slots=True)
 class OutgoingMessage:
@@ -53,6 +80,12 @@ class OutgoingMessage:
 
     route: Route
     text: str
+
+    fallback: Route | None = None
+    """Where to deliver instead if ``route`` -- a ``user:<id>`` address -- is
+    refused by the recipient (e.g. Discord DMs closed). The adapter delivers
+    there mentioning that user, so they are still notified. Adapters that
+    cannot tell a refusal apart ignore it."""
 
     idempotency_key: str | None = None
     """Stable across retries of the same logical message, so a platform that

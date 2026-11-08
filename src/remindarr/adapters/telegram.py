@@ -16,7 +16,7 @@ from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, Time
 from telegram.ext import Application, MessageHandler, filters
 
 from remindarr.core.clock import utcnow
-from remindarr.core.types import IncomingMessage, OutgoingMessage, Route, Sender
+from remindarr.core.types import USER_PREFIX, IncomingMessage, OutgoingMessage, Route, Sender
 
 from .base import DeliveryError
 from .base import MessageHandler as CoreHandler
@@ -83,6 +83,7 @@ class TelegramAdapter:
             route=Route(PLATFORM, str(chat.id)),
             text=message.text,
             received_at=message.date or utcnow(),
+            direct=chat.type == "private",
         )
 
         try:
@@ -97,9 +98,9 @@ class TelegramAdapter:
 
     async def send(self, message: OutgoingMessage) -> None:
         try:
-            await self._app.bot.send_message(
-                chat_id=int(message.route.address), text=_truncate(message.text)
-            )
+            # A private chat's id is the user's id, so "user:<id>" needs no lookup.
+            address = message.route.address.removeprefix(USER_PREFIX)
+            await self._app.bot.send_message(chat_id=int(address), text=_truncate(message.text))
         except Forbidden as exc:
             # The user blocked the bot or deleted the chat. Retrying cannot help.
             raise DeliveryError(f"telegram forbidden: {exc}", permanent=True) from exc
