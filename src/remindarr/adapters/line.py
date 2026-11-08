@@ -45,7 +45,7 @@ import structlog
 from aiohttp import web
 
 from remindarr.core.clock import utcnow
-from remindarr.core.types import IncomingMessage, OutgoingMessage, Route, Sender
+from remindarr.core.types import USER_PREFIX, IncomingMessage, OutgoingMessage, Route, Sender
 
 from .base import DeliveryError
 from .base import MessageHandler as CoreHandler
@@ -245,6 +245,7 @@ class LineAdapter:
             route=route,
             text=text,
             received_at=_timestamp_of(event),
+            direct=_source_type(event) == "user",
         )
 
         try:
@@ -280,7 +281,9 @@ class LineAdapter:
     # --- delivery ------------------------------------------------------------
 
     async def send(self, message: OutgoingMessage) -> None:
-        body = {"to": message.route.address, "messages": [_text_message(message.text)]}
+        # A push to a userId reaches their 1:1 chat, so "user:<id>" is just the id.
+        to = message.route.address.removeprefix(USER_PREFIX)
+        body = {"to": to, "messages": [_text_message(message.text)]}
         headers = {}
         if message.idempotency_key is not None:
             # Lets the scheduler's retry of a push whose response was lost come

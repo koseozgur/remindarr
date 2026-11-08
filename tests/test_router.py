@@ -134,7 +134,7 @@ class TestCommands:
         reply = await router.handle(message("/list"))
         assert reply is not None
         assert "water the plants" in reply.text
-        assert "1." in reply.text
+        assert "#1 water the plants" in reply.text
 
     async def test_cancel(
         self, router: Router, session_factory: async_sessionmaker[AsyncSession]

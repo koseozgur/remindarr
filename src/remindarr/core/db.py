@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from sqlalchemy import Connection, inspect
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -48,6 +49,32 @@ async def init_schema(engine: AsyncEngine) -> None:
             await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
             await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
         await conn.run_sync(Base.metadata.create_all)
+        missing = await conn.run_sync(_missing_columns)
+    if missing:
+        raise SchemaOutdated(
+            "The database was created by an older remindarr and lacks "
+            f"{', '.join(missing)}. There are no migrations yet: back up the "
+            "database file if it matters, then delete it and restart to get a "
+            "fresh one."
+        )
+
+
+class SchemaOutdated(RuntimeError):
+    """An existing database is missing columns this version needs.
+
+    ``create_all`` creates missing *tables* but never alters existing ones, so
+    without this check an old database fails later with an opaque "no such
+    column" on the first query that touches the new field.
+    """
+
+
+def _missing_columns(conn: Connection) -> list[str]:
+    inspector = inspect(conn)
+    missing: list[str] = []
+    for table in Base.metadata.sorted_tables:
+        present = {c["name"] for c in inspector.get_columns(table.name)}
+        missing += [f"{table.name}.{c.name}" for c in table.columns if c.name not in present]
+    return missing
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

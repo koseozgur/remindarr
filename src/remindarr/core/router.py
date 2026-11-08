@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from remindarr.config import Settings
 
-from . import service
+from . import delivery, service
 from .clock import utcnow
 from .db import session_scope
 from .humanize import format_when
@@ -37,6 +37,8 @@ I set reminders. Tell me what and when:
   remind me to check the burn-in in 45 minutes
   water the plants on saturday morning
   rent is due on 1 september
+
+Add @line, @discord or @telegram to have it delivered on that app instead.
 
 Commands:
   /list          what is pending
@@ -83,7 +85,7 @@ class Router:
             # tomorrow" would silently become a /list and the reminder would be
             # thrown away.
             if not text.startswith("/"):
-                return await self._create(session, subscriber, message.route, text, tz, now)
+                return await self._create(session, subscriber, message, text, tz, now)
 
             head, _, rest = text[1:].partition(" ")
             # Telegram addresses commands as "/list@mybot" in group chats.
@@ -94,14 +96,14 @@ class Router:
                 case "start" | "help" | "h":
                     return Reply(HELP)
                 case "list" | "ls":
-                    return await self._list(session, subscriber.id, tz, now)
+                    return await self._list(session, subscriber.id, message.route, tz, now)
                 case "cancel" | "rm" | "del":
                     return await self._cancel(session, subscriber.id, rest, tz, now)
                 case "tz" | "timezone":
                     return await self._timezone(session, subscriber, rest, now)
                 case "remind" | "r":
                     # "/remind ..." is a reminder, not a command with a body.
-                    return await self._create(session, subscriber, message.route, text, tz, now)
+                    return await self._create(session, subscriber, message, text, tz, now)
                 case _:
                     return Reply(f"Unknown command /{command}. Try /help.")
 
@@ -109,13 +111,19 @@ class Router:
         self,
         session: AsyncSession,
         subscriber: Subscriber,
-        route: Route,
+        message: IncomingMessage,
         text: str,
         tz: ZoneInfo,
         now: datetime,
     ) -> Reply:
+        # The @app override comes out before time parsing, so "@line" can never
+        # be read as part of the task or the time.
+        target = delivery.resolve(message, text, self.settings)
+        if isinstance(target, delivery.Refusal):
+            return Reply(target.reason)
+
         try:
-            parsed = parse(text, now_utc=now, tz=tz)
+            parsed = parse(target.text, now_utc=now, tz=tz)
         except TimeParseError as exc:
             return Reply(f"{exc}.\n\nTry something like “call mom tomorrow at 9”, or /help.")
 
@@ -124,27 +132,42 @@ class Router:
             subscriber=subscriber,
             text=parsed.text,
             due_at=parsed.due_at,
-            route=route,
+            route=target.route,
+            fallback=target.fallback,
             now=now,
         )
         when = format_when(parsed.due_at, tz, now_utc=now)
         lines = [f"Got it — “{parsed.text}” {when}.", f"id {reminder.id}"]
+        where = delivery.disclosure(target.route, message.route)
+        if where is not None:
+            lines.append(where)
         lines.extend(f"note: {w}" for w in parsed.warnings)
         return Reply("\n".join(lines))
 
     async def _list(
-        self, session: AsyncSession, subscriber_id: int, tz: ZoneInfo, now: datetime
+        self,
+        session: AsyncSession,
+        subscriber_id: int,
+        here: Route,
+        tz: ZoneInfo,
+        now: datetime,
     ) -> Reply:
         pending = await service.list_pending(session, subscriber_id=subscriber_id)
         if not pending:
             return Reply("Nothing pending.")
         lines = ["Pending:"]
-        lines += [f"  {r.id}. {r.text} — {format_when(r.due_at, tz, now_utc=now)}" for r in pending]
+        for r in pending:
+            where = delivery.label(Route(r.delivery_platform, r.delivery_address), here)
+            # "#3", not "3.": Discord renders "3. text" as a markdown ordered
+            # list (renumbered, with extra spacing). "#3" with no space after
+            # it is plain text everywhere.
+            lines.append(f"  #{r.id} {r.text} — {format_when(r.due_at, tz, now_utc=now)}{where}")
         return Reply("\n".join(lines))
 
     async def _cancel(
         self, session: AsyncSession, subscriber_id: int, arg: str, tz: ZoneInfo, now: datetime
     ) -> Reply:
+        arg = arg.removeprefix("#")  # /list shows "#3", so "/cancel #3" must work
         if not arg.isdigit():
             return Reply("Which one? Use /cancel <id> — /list shows the ids.")
         reminder = await service.get_reminder(

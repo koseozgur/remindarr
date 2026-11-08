@@ -246,6 +246,27 @@ class TestWebhook:
         assert api.requests == []
 
     @pytest.mark.parametrize(
+        ("source", "direct"),
+        [
+            ({"type": "user", "userId": "U1"}, True),
+            ({"type": "group", "groupId": "G1", "userId": "U1"}, False),
+            ({"type": "room", "roomId": "R1", "userId": "U1"}, False),
+        ],
+    )
+    async def test_only_a_one_to_one_chat_is_direct(
+        self,
+        webhook: Client,
+        line: LineAdapter,
+        handler: RecordingHandler,
+        source: dict[str, str],
+        direct: bool,
+    ) -> None:
+        await post(webhook, payload(text_event(source=source)))
+        await line.drain()
+        [msg] = handler.received
+        assert msg.direct is direct
+
+    @pytest.mark.parametrize(
         ("source", "address"),
         [
             ({"type": "user", "userId": "U1"}, "U1"),
@@ -405,6 +426,16 @@ class TestPush:
         assert headers["Authorization"] == f"Bearer {TOKEN}"
         assert headers["X-Line-Retry-Key"] == RETRY_KEY
         assert body == {"to": "U1", "messages": [{"type": "text", "text": "⏰ take the bins out"}]}
+
+    async def test_push_to_a_user_address_goes_to_their_user_id(
+        self, line: LineAdapter, api: FakeLineApi
+    ) -> None:
+        """Cross-app delivery asks for "user:<id>"; on LINE that is just the id."""
+        await line.send(
+            OutgoingMessage(route=Route.direct_to("line", "U9"), text="x", idempotency_key=None)
+        )
+        [(_, _, body)] = api.requests
+        assert body["to"] == "U9"
 
     async def test_no_retry_key_header_without_idempotency_key(
         self, line: LineAdapter, api: FakeLineApi

@@ -8,6 +8,7 @@ a TypeError in whatever code touches the value first.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -15,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import StatementError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from remindarr.core.db import SchemaOutdated, create_engine, init_schema
 from remindarr.core.models import Reminder, ReminderState, Subscriber
 
 from .conftest import NOW
@@ -135,3 +137,27 @@ class TestUtcDateTime:
                     )
                 )
                 await s.commit()
+
+
+async def test_an_outdated_database_is_reported_not_left_to_fail_later(tmp_path: Path) -> None:
+    """create_all never adds columns to an existing table. Without the check,
+    an old database dies on the first query with "no such column"."""
+    url = f"sqlite+aiosqlite:///{tmp_path / 'old.db'}"
+    engine = create_engine(url)
+    try:
+        await init_schema(engine)
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql("ALTER TABLE reminders DROP COLUMN fallback_address")
+        with pytest.raises(SchemaOutdated, match=r"reminders\.fallback_address"):
+            await init_schema(engine)
+    finally:
+        await engine.dispose()
+
+
+async def test_a_current_database_passes_the_check(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'new.db'}")
+    try:
+        await init_schema(engine)
+        await init_schema(engine)  # idempotent on a database it created
+    finally:
+        await engine.dispose()

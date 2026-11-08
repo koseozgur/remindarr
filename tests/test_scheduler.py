@@ -398,3 +398,22 @@ class TestIdempotencyKey:
             created_at=first.created_at + timedelta(seconds=5),
         )
         assert idempotency_key(first) != idempotency_key(reborn)
+
+
+async def test_scheduler_passes_the_fallback_route_to_the_adapter(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    registry: DeliveryRegistry,
+    adapter: FakeAdapter,
+) -> None:
+    rid = await add_reminder(session_factory, due_offset=timedelta(minutes=-1), address="user:u1")
+    async with session_factory() as s:
+        row = await s.get(Reminder, rid)
+        assert row is not None
+        row.fallback_address = "chan42"
+        await s.commit()
+    await make_scheduler(settings, session_factory, registry).tick()
+    [sent] = adapter.sent
+    assert sent.route.address == "user:u1"
+    assert sent.fallback is not None and sent.fallback.address == "chan42"
+    assert sent.fallback.platform == sent.route.platform

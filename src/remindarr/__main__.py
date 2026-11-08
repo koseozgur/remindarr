@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from remindarr import logging as log_setup
 from remindarr.app import NoAdaptersConfigured, run
 from remindarr.config import Settings
+from remindarr.core.db import SchemaOutdated
 
 
 def main() -> int:
@@ -26,7 +27,7 @@ def main() -> int:
     log_setup.configure(level=settings.log_level, json=settings.log_json)
     try:
         asyncio.run(run(settings))
-    except NoAdaptersConfigured as exc:
+    except (NoAdaptersConfigured, SchemaOutdated) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
