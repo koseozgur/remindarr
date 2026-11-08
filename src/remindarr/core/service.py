@@ -51,6 +51,7 @@ async def create_reminder(
     route: Route,
     now: datetime,
     fallback: Route | None = None,
+    recipient: str | None = None,
 ) -> Reminder:
     if fallback is not None and fallback.platform != route.platform:
         raise ValueError("a fallback route must be on the delivery platform")
@@ -63,6 +64,7 @@ async def create_reminder(
         delivery_platform=route.platform,
         delivery_address=route.address,
         fallback_address=fallback.address if fallback is not None else None,
+        recipient=recipient,
         created_at=now,
     )
     session.add(reminder)

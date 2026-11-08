@@ -11,7 +11,7 @@
   <img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white">
   <img alt="Typed: mypy strict" src="https://img.shields.io/badge/mypy-strict-2A6DB2">
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/badge/lint-ruff-D7FF64"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-282-3fb950">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-307-3fb950">
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
@@ -367,10 +367,51 @@ and is not retried.
 **Nothing in a reminder can ping anyone.** Reminder text is whatever someone
 typed. On Discord every message is sent with mentions disabled, so
 `@everyone`, `@here`, a role or a user mention in the text is inert. The one
-exception is the channel fallback's mention of the person who set it.
+exception is the channel fallback's mention of the person the reminder is for.
 
 One limit: each app's identity still has its own reminders. `/list` and
 `/cancel` on Discord do not see what you set on LINE.
+
+### Reminding someone else
+
+Name a person from `REMINDARR_PEOPLE` with `@`:
+
+```
+take out the bins @mum tomorrow at 21:00
+```
+
+The reminder goes to mum, and you are told where it will go:
+
+```
+Got it — “take out the bins” tomorrow at 21:00 (in 11 hours).
+id 12
+It'll go to mum as a direct message on LINE, marked “from oz”.
+```
+
+At 21:00 mum gets `⏰ take out the bins (from oz)`. The "from" is your name
+in `REMINDARR_PEOPLE`, or your display name if you are not in it.
+
+- **Which app:** add `@line` or `@discord` to choose (`@mum @line`).
+  Otherwise it goes to mum's default app if she has one, or to her only app.
+  If she has several and no default, remindarr asks you to pick rather than
+  guess. A person with no identity on the app you asked for is refused.
+- **On Discord**, a real mention (`@mum` picked from the member list, which
+  Discord sends as `<@id>`) works too, if that account is in
+  `REMINDARR_PEOPLE`. A name or mention that is not a person stays in the
+  text as written.
+- **It is yours.** It is parsed in your timezone. It shows in your `/list`
+  (`#12 take out the bins — … → mum on LINE`), and only you can `/cancel` it.
+  Mum does not see it until it arrives.
+- **One person per reminder.** Naming two people is refused; set one each.
+  Naming yourself is just a normal reminder.
+- **Discord fallback.** If mum's Discord DMs are closed and you set it in a
+  server channel, it falls back to that channel, mentioning mum and no one
+  else.
+- **Who may remind whom:** anyone on the allow-list may remind anyone in
+  `REMINDARR_PEOPLE`. There is no consent step. This is meant for a trusted
+  household, where the owner already decided who is in the list.
+- **Quota:** a reminder delivered to someone by LINE push counts against the
+  200/month cap exactly as your own would.
 
 ---
 
@@ -518,7 +559,8 @@ actually does.
 
 No Alembic yet. The schema is young enough that a bad migration costs more than
 a rebuild. When a version adds a column (cross-app delivery added
-`reminders.fallback_address`), an older database is refused at startup with a
+`reminders.fallback_address`; reminding others added `reminders.recipient`),
+an older database is refused at startup with a
 message naming the missing column. Back it up if it matters, then delete it
 and start fresh. When it stabilises and there is data worth preserving, that is the
 moment to add migrations — not before.
@@ -547,6 +589,8 @@ moment to add migrations — not before.
 - Slack, ntfy, email, SMS delivery adapters.
 - One `/list` across a person's identities, so you can see and cancel on
   Discord what you set on LINE.
+- Reminding several people at once; letting a recipient see (or cancel) what
+  others set for them; parsing a reminder for someone in *their* timezone.
 
 ### WhatsApp: outbound only, and not soon
 
