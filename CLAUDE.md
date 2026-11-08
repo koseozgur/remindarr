@@ -150,19 +150,38 @@ image build and startup smoke test on every push — the image builds, but has
 **not yet been run with real tokens**, and no message has made a real round
 trip through Telegram or Discord.
 
-**LINE adapter built (2026-11-08):** webhook capture (signature-verified,
-deduped, async-acked) and push delivery (retry-keyed via
-`OutgoingMessage.idempotency_key`). 179 tests. Tested only against a fake
-LINE API — the owner has not created the LINE Official Account yet, so
-**nothing has touched the real LINE API**. This is the first inbound
-endpoint; ingress (small GCP VM vs Cloudflare Tunnel) is still undecided and
-the adapter deliberately does not care.
+**LINE works end to end (2026-11-08).** Webhook capture (signature-verified
+over the raw body, deduped on `webhookEventId`, acked before processing) and
+push delivery (retry-keyed via `OutgoingMessage.idempotency_key`). 179 tests.
+**First real round trip the same day**: owner's phone → LINE → webhook via a
+Cloudflare quick tunnel from the dev Mac → reply → scheduled push delivered on
+time. The owner has a free LINE Official Account (Japan, Communication plan:
+200 counted pushes/month, hard cap; replies are free). Its Basic ID is
+deliberately not recorded in this public repo. The owner does not use
+Telegram; Telegram and Discord have still never had a real round trip.
 
-**Not yet decided:** the mobile approach (native per-platform vs
-cross-platform toolkit) is still open, and unblocked — nothing in v0
-depends on it. LINE ingress, as above.
+**Decided (2026-11-08):**
+- **Production ingress: a free-tier GCP e2-micro in a US region** (the VM, a
+  30 GB disk and one external IPv4 are all inside the free tier, per the
+  Cloud Billing Catalog). It's isolated from the home network, which stays
+  inbound-closed apart from WireGuard. The owner's billing account
+  `billing` is open, and an AI Pro $10/month GCP credit exists as a buffer.
+  Home port-forwarding was rejected: double NAT, DSM owns 443, and it would
+  be the home LAN's first internet-facing TCP service.
+- **Mobile: native iOS, later, on Apple's free tier first** (own phone only,
+  7-day re-signing), as the home for location triggers and locally scheduled
+  notifications. The $99/yr Developer Program only buys remote push and
+  TestFlight for family; defer it until those are actually wanted. LINE is
+  the family-reaching surface; the app complements it rather than replacing it.
 
-**Next:** a real LINE round trip + ingress, a warning before the 200/month
-push quota runs out, then recurring reminders (the `recurrence` column is
-reserved and unused), then location triggers — which must not be allowed to
-slide off the roadmap.
+**Next:**
+1. **Access control before any 24/7 deploy.** Anyone who friends the bot
+   can set reminders, and each one spends the owner's 200/month push quota.
+   That needs an allow-list of permitted platform user IDs.
+2. Deploy to the GCP VM (stable webhook URL; the tunnel URL changes every run).
+3. A warning before the 200/month quota runs out.
+4. Recurring reminders (the `recurrence` column is reserved and unused).
+5. Location triggers, which must not be allowed to slide off the roadmap.
+
+Small follow-ups: behind a tunnel, `line.bad_signature` logs every caller as
+127.0.0.1; persistent dedupe if webhook redelivery is turned on in production.
