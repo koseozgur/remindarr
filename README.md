@@ -11,7 +11,7 @@
   <img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white">
   <img alt="Typed: mypy strict" src="https://img.shields.io/badge/mypy-strict-2A6DB2">
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/badge/lint-ruff-D7FF64"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-121-3fb950">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-128-3fb950">
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 

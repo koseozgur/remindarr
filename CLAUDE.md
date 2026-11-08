@@ -141,7 +141,7 @@ is the *only* new thing.
 ## Status
 
 **v0 done:** capture → parse → store → schedule → deliver, on Telegram and
-Discord. 121 tests, mypy strict, ruff clean. CI (GitHub Actions) runs all
+Discord. 128 tests, mypy strict, ruff clean. CI (GitHub Actions) runs all
 of that plus a Docker image build and startup smoke test on every push —
 the image builds, but has **not yet been run with real tokens**, and no
 message has made a real round trip through Telegram or Discord.
