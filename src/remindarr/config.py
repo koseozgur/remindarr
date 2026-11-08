@@ -54,6 +54,19 @@ class Settings(BaseSettings):
             raise ValueError(f"unknown timezone {v!r}") from exc
         return v
 
+    @field_validator("telegram_token", "discord_token", mode="before")
+    @classmethod
+    def _blank_token_means_unset(cls, v: object) -> object:
+        """``REMINDARR_TELEGRAM_TOKEN=`` with nothing after it is "not configured".
+
+        pydantic would otherwise read it as the empty string, enabling the
+        platform with an empty token -- and ``.env.example`` ships every token
+        blank, so anyone who fills in only one platform would hit this.
+        """
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
     @property
     def enabled_platforms(self) -> list[str]:
         enabled = []

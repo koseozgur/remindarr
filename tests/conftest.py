@@ -38,6 +38,9 @@ async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
+        # Never read the developer's real .env: once it holds live tokens,
+        # tests would silently run with them.
+        _env_file=None,
         database_url="sqlite+aiosqlite://",
         default_timezone="Asia/Tokyo",
         tick_seconds=0.01,
