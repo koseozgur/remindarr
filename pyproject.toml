@@ -7,6 +7,9 @@ requires-python = ">=3.13"
 license = { text = "MIT" }
 
 dependencies = [
+    # LINE adapter: webhook server and API client. Already pulled in by
+    # discord.py, but imported directly, so pinned directly.
+    "aiohttp==3.14.5",
     "python-telegram-bot==22.8",
     "discord.py==2.7.1",
     # The [asyncio] extra pulls in greenlet, without which every async DB call

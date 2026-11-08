@@ -6,6 +6,7 @@ arrives, once, at roughly the right time, and says so honestly if it is late".
 
 from __future__ import annotations
 
+import uuid
 from datetime import timedelta
 
 from sqlalchemy import select
@@ -14,7 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from remindarr.adapters.base import DeliveryError, DeliveryRegistry
 from remindarr.config import Settings
 from remindarr.core.models import Reminder, ReminderState, Subscriber
-from remindarr.core.scheduler import Scheduler
+from remindarr.core.scheduler import Scheduler, idempotency_key
+from remindarr.core.types import OutgoingMessage
 
 from .conftest import NOW, FakeAdapter, MutableClock
 
@@ -334,3 +336,65 @@ class TestLateness:
         await add_reminder(session_factory, due_offset=timedelta(minutes=-30))
         await make_scheduler(settings, session_factory, registry).tick()
         assert "delivered late" not in adapter.texts[0]
+
+
+class TestIdempotencyKey:
+    async def test_retries_of_one_reminder_share_a_key(
+        self,
+        settings: Settings,
+        session_factory: async_sessionmaker[AsyncSession],
+        registry: DeliveryRegistry,
+        adapter: FakeAdapter,
+    ) -> None:
+        """A retry whose first attempt actually landed must look like the same
+        message to the platform, or LINE delivers (and bills) it twice."""
+        adapter.fail_with = DeliveryError("response lost")
+        adapter.fail_times = 1
+        rid = await add_reminder(session_factory, due_offset=timedelta(minutes=-1))
+        clock = MutableClock()
+        scheduler = Scheduler(
+            settings=settings, session_factory=session_factory, registry=registry, clock=clock
+        )
+        sent_keys: list[str | None] = []
+        original_send = adapter.send
+
+        async def spy(message: OutgoingMessage) -> None:
+            sent_keys.append(message.idempotency_key)
+            await original_send(message)
+
+        adapter.send = spy  # type: ignore[method-assign]
+
+        await scheduler.tick()
+        clock.advance(timedelta(hours=1))
+        await scheduler.tick()
+
+        assert (await get(session_factory, rid)).state is ReminderState.SENT
+        assert len(sent_keys) == 2
+        assert sent_keys[0] is not None and sent_keys[0] == sent_keys[1]
+        assert uuid.UUID(sent_keys[0])  # LINE requires a UUID
+
+    async def test_different_reminders_get_different_keys(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        a = await get(session_factory, await add_reminder(session_factory, due_offset=timedelta()))
+        b = await get(session_factory, await add_reminder(session_factory, due_offset=timedelta()))
+        assert idempotency_key(a) != idempotency_key(b)
+
+    async def test_reused_id_gets_a_different_key(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """SQLite hands out a deleted row's id again; the key must not follow it."""
+        first = await get(
+            session_factory, await add_reminder(session_factory, due_offset=timedelta())
+        )
+        reborn = Reminder(
+            id=first.id,
+            subscriber_id=first.subscriber_id,
+            text="something else",
+            due_at=first.due_at + timedelta(days=1),
+            next_attempt_at=first.next_attempt_at,
+            delivery_platform="line",
+            delivery_address="U1",
+            created_at=first.created_at + timedelta(seconds=5),
+        )
+        assert idempotency_key(first) != idempotency_key(reborn)
