@@ -39,6 +39,19 @@ def build_adapters(settings: Settings) -> list[object]:
 
         adapters.append(DiscordAdapter(settings.discord_token.get_secret_value()))
 
+    if settings.line_channel_secret is not None and settings.line_channel_access_token is not None:
+        from remindarr.adapters.line import LineAdapter
+
+        adapters.append(
+            LineAdapter(
+                settings.line_channel_secret.get_secret_value(),
+                settings.line_channel_access_token.get_secret_value(),
+                host=settings.webhook_host,
+                port=settings.webhook_port,
+                path=settings.line_webhook_path,
+            )
+        )
+
     return adapters
 
 
@@ -46,8 +59,9 @@ async def run(settings: Settings) -> None:
     adapters = build_adapters(settings)
     if not adapters:
         raise NoAdaptersConfigured(
-            "No platform tokens set. Set REMINDARR_TELEGRAM_TOKEN and/or "
-            "REMINDARR_DISCORD_TOKEN (see .env.example)."
+            "No platform tokens set. Set REMINDARR_TELEGRAM_TOKEN, "
+            "REMINDARR_DISCORD_TOKEN, and/or both REMINDARR_LINE_CHANNEL_SECRET and "
+            "REMINDARR_LINE_CHANNEL_ACCESS_TOKEN (see .env.example)."
         )
 
     engine = create_engine(settings.database_url)

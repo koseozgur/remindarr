@@ -1,7 +1,9 @@
 """Configuration, from environment or a ``.env`` file.
 
 An adapter is enabled by having a token. There is no separate "enable" flag to
-get out of sync with whether the credential is actually present.
+get out of sync with whether the credential is actually present. LINE needs two
+credentials, so it is enabled by having both -- and having only one is a
+startup error rather than a silently disabled platform.
 """
 
 from __future__ import annotations
@@ -9,7 +11,7 @@ from __future__ import annotations
 import zoneinfo
 from typing import Annotated
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +30,15 @@ class Settings(BaseSettings):
 
     telegram_token: SecretStr | None = None
     discord_token: SecretStr | None = None
+
+    line_channel_secret: SecretStr | None = None
+    """Verifies that webhook requests really come from LINE."""
+    line_channel_access_token: SecretStr | None = None
+    """Authorises replies and pushes. The long-lived token from the console."""
+
+    webhook_host: str = "0.0.0.0"
+    webhook_port: Annotated[int, Field(ge=1, le=65535)] = 8080
+    line_webhook_path: str = "/line/webhook"
 
     tick_seconds: Annotated[float, Field(gt=0)] = 15.0
     """How often the scheduler looks for due reminders."""
@@ -54,7 +65,20 @@ class Settings(BaseSettings):
             raise ValueError(f"unknown timezone {v!r}") from exc
         return v
 
-    @field_validator("telegram_token", "discord_token", mode="before")
+    @field_validator("line_webhook_path")
+    @classmethod
+    def _validate_webhook_path(cls, v: str) -> str:
+        if not v.startswith("/"):
+            raise ValueError(f"line_webhook_path must start with '/', got {v!r}")
+        return v
+
+    @field_validator(
+        "telegram_token",
+        "discord_token",
+        "line_channel_secret",
+        "line_channel_access_token",
+        mode="before",
+    )
     @classmethod
     def _blank_token_means_unset(cls, v: object) -> object:
         """``REMINDARR_TELEGRAM_TOKEN=`` with nothing after it is "not configured".
@@ -67,6 +91,22 @@ class Settings(BaseSettings):
             return None
         return v
 
+    @model_validator(mode="after")
+    def _line_needs_both_credentials(self) -> Settings:
+        has_secret = self.line_channel_secret is not None
+        has_token = self.line_channel_access_token is not None
+        if has_secret != has_token:
+            present, missing = (
+                ("LINE_CHANNEL_SECRET", "LINE_CHANNEL_ACCESS_TOKEN")
+                if has_secret
+                else ("LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET")
+            )
+            raise ValueError(
+                f"REMINDARR_{present} is set but REMINDARR_{missing} is not. "
+                "LINE needs both (or neither, to leave it disabled)."
+            )
+        return self
+
     @property
     def enabled_platforms(self) -> list[str]:
         enabled = []
@@ -74,4 +114,10 @@ class Settings(BaseSettings):
             enabled.append("telegram")
         if self.discord_token is not None:
             enabled.append("discord")
+        if self.line_enabled:
+            enabled.append("line")
         return enabled
+
+    @property
+    def line_enabled(self) -> bool:
+        return self.line_channel_secret is not None and self.line_channel_access_token is not None

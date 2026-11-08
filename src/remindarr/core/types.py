@@ -54,6 +54,12 @@ class OutgoingMessage:
     route: Route
     text: str
 
+    idempotency_key: str | None = None
+    """Stable across retries of the same logical message, so a platform that
+    supports it can drop a duplicate whose first attempt actually landed (LINE's
+    ``X-Line-Retry-Key``). A UUID string. Adapters without such a mechanism
+    ignore it."""
+
 
 @dataclass(frozen=True, slots=True)
 class Reply:

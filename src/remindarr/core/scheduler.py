@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -36,6 +37,9 @@ from .models import Reminder, ReminderState
 from .types import OutgoingMessage, Route
 
 log = structlog.get_logger(__name__)
+
+IDEMPOTENCY_NAMESPACE = uuid.UUID("6f0c2b5e-4a8e-5d8c-9a51-2f6c3e1d7b40")
+"""Fixed namespace for :func:`idempotency_key`. Changing it changes every key."""
 
 BATCH_LIMIT = 100
 """Ceiling on one tick's work, so a large backlog after long downtime is drained
@@ -102,6 +106,7 @@ class Scheduler:
             message = OutgoingMessage(
                 route=Route(reminder.delivery_platform, reminder.delivery_address),
                 text=self._render(reminder, now),
+                idempotency_key=idempotency_key(reminder),
             )
             try:
                 await adapter.send(message)
@@ -154,3 +159,17 @@ class Scheduler:
         if lateness.total_seconds() > grace:
             body += f"\n(this was due {format_delta(-lateness)} — delivered late)"
         return body
+
+
+def idempotency_key(reminder: Reminder) -> str:
+    """The same UUID for every delivery attempt of one reminder.
+
+    Derived from the row rather than generated per attempt, so a retry after a
+    lost response carries the key of the attempt that may already have landed.
+    ``created_at`` and ``due_at`` are mixed in because SQLite reuses the
+    highest id after a delete -- and a clean rebuild of the database restarts
+    ids from 1 -- so an id alone could collide with a different reminder's key
+    inside a platform's dedupe window and get a real reminder dropped.
+    """
+    name = f"reminder:{reminder.id}:{reminder.created_at.isoformat()}:{reminder.due_at.isoformat()}"
+    return str(uuid.uuid5(IDEMPOTENCY_NAMESPACE, name))
