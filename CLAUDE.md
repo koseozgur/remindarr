@@ -135,22 +135,34 @@ is the *only* new thing.
   parser's failure mode is silently reading task text as a date, which
   yields a confidently wrong reminder; a narrow one says "I didn't
   understand", which is fixable.
-- **No inbound ports.** Telegram long-polls, Discord uses its gateway —
-  both outbound. This changes when LINE lands, since LINE requires webhooks.
+- **Inbound ports only for LINE.** Telegram long-polls, Discord uses its
+  gateway — both outbound. LINE requires a webhook, so enabling it opens one
+  plain-HTTP listener (`REMINDARR_WEBHOOK_*`); TLS/ingress is the deployment's
+  job. The `x-line-signature` HMAC is the whole security boundary.
+- **HTTP for LINE is plain `aiohttp`,** not `line-bot-sdk`: two POST endpoints
+  and one header don't justify a dependency.
 
 ## Status
 
 **v0 done:** capture → parse → store → schedule → deliver, on Telegram and
-Discord. 128 tests, mypy strict, ruff clean. CI (GitHub Actions) runs all
-of that plus a Docker image build and startup smoke test on every push —
-the image builds, but has **not yet been run with real tokens**, and no
-message has made a real round trip through Telegram or Discord.
+Discord. CI (GitHub Actions) runs tests, mypy strict and ruff plus a Docker
+image build and startup smoke test on every push — the image builds, but has
+**not yet been run with real tokens**, and no message has made a real round
+trip through Telegram or Discord.
+
+**LINE adapter built (2026-11-08):** webhook capture (signature-verified,
+deduped, async-acked) and push delivery (retry-keyed via
+`OutgoingMessage.idempotency_key`). 179 tests. Tested only against a fake
+LINE API — the owner has not created the LINE Official Account yet, so
+**nothing has touched the real LINE API**. This is the first inbound
+endpoint; ingress (small GCP VM vs Cloudflare Tunnel) is still undecided and
+the adapter deliberately does not care.
 
 **Not yet decided:** the mobile approach (native per-platform vs
 cross-platform toolkit) is still open, and unblocked — nothing in v0
-depends on it.
+depends on it. LINE ingress, as above.
 
-**Next:** LINE (the differentiator, and the first webhook requirement),
-then recurring reminders (the `recurrence` column is reserved and unused),
-then location triggers — which must not be allowed to slide off the
-roadmap.
+**Next:** a real LINE round trip + ingress, a warning before the 200/month
+push quota runs out, then recurring reminders (the `recurrence` column is
+reserved and unused), then location triggers — which must not be allowed to
+slide off the roadmap.

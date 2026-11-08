@@ -16,8 +16,12 @@ services:
       # see, copy, and back up with the rest of the homelab.
       - ./data:/data
 
-    # No ports section, deliberately: both adapters connect outbound, so
-    # nothing needs to reach this container.
+    # Not published by default, deliberately: Telegram and Discord connect
+    # outbound. LINE needs its webhook reachable over public HTTPS; how (a
+    # reverse proxy on this network, a tunnel, a port on the host) is your
+    # call. To publish it on the host, uncomment:
+    # ports:
+    #   - "8080:8080"
 
     logging:
       driver: json-file

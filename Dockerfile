@@ -42,7 +42,10 @@ WORKDIR /app
 USER app
 VOLUME ["/data"]
 
-# No ports. Telegram long-polls and Discord uses its gateway, both outbound --
-# nothing needs to reach this container from outside.
+# Telegram long-polls and Discord uses its gateway, both outbound. Only LINE
+# needs to be reached from outside: its webhook listens here when LINE is
+# configured (REMINDARR_WEBHOOK_PORT). EXPOSE documents that; it publishes
+# nothing.
+EXPOSE 8080
 
 ENTRYPOINT ["remindarr"]

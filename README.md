@@ -11,7 +11,7 @@
   <img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white">
   <img alt="Typed: mypy strict" src="https://img.shields.io/badge/mypy-strict-2A6DB2">
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/badge/lint-ruff-D7FF64"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-128-3fb950">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-179-3fb950">
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
@@ -23,7 +23,8 @@
 <p align="center"><sub>Generated from the real code — see <a href="#how-it-works">How it works</a>.</sub></p>
 
 **Status: v0, working end to end.** Telegram and Discord, one-shot reminders,
-SQLite. See [Roadmap](#roadmap) for what is deliberately not here yet.
+SQLite. LINE is implemented and tested against a fake LINE API, but has not yet
+made a round trip through the real one. See [Roadmap](#roadmap) for what is deliberately not here yet.
 
 ---
 
@@ -72,11 +73,11 @@ flowchart LR
 
     T1 --> core
     D1 --> core
-    L1 -.-> core
+    L1 --> core
 
     core --> T2
     core --> D2
-    core -.-> L2
+    core --> L2
     core -.-> O2
 ```
 
@@ -92,15 +93,24 @@ symmetry would have to be unpicked to express that.
 The core never sees a platform object. Adapters translate to
 `IncomingMessage` / `OutgoingMessage` at the boundary.
 
-### No inbound ports
+### Inbound ports: none, unless you enable LINE
 
 Telegram long-polls and Discord uses its gateway websocket. Both are
-**outbound** connections, so v0 runs behind NAT on a home NAS with no port
-forwarding, no reverse proxy, and no TLS certificate.
+**outbound** connections, so with only those two enabled remindarr runs behind
+NAT on a home NAS with no port forwarding, no reverse proxy, and no TLS
+certificate.
 
-That changes when LINE lands — LINE *requires* webhooks, and that is the point
-at which ingress becomes a real deployment question. Worth knowing before you
-plan for it.
+LINE is different: it *requires* a webhook, so enabling it opens the project's
+first inbound endpoint. remindarr listens on plain HTTP at
+`REMINDARR_WEBHOOK_HOST:REMINDARR_WEBHOOK_PORT` (default `0.0.0.0:8080`), path
+`REMINDARR_LINE_WEBHOOK_PATH`; LINE must reach that over **public HTTPS**. How
+— a reverse proxy, a tunnel, a small VM — is a deployment choice remindarr does
+not make for you.
+
+LINE does not publish the addresses its webhooks come from, so requests are
+authenticated solely by the `x-line-signature` HMAC, verified over the raw
+body before anything is parsed. A request that fails it gets a 401 and touches
+nothing.
 
 ---
 
@@ -135,6 +145,60 @@ out of sync with whether the credential is actually there.
    *Read Message History* → open the URL to invite it.
 4. Put the token in `.env` as `REMINDARR_DISCORD_TOKEN`.
 
+### Setting up LINE
+
+LINE needs two credentials and a public HTTPS URL (see
+[Inbound ports](#inbound-ports-none-unless-you-enable-line)).
+
+1. Create a free **LINE Official Account** (via the
+   [LINE Official Account Manager](https://manager.line.biz/) or the
+   [LINE Developers Console](https://developers.line.biz/console/)).
+2. In the Official Account Manager, **enable the Messaging API** for it. This
+   creates a Messaging API channel in the Developers Console.
+3. Developers Console → your channel:
+   - **Basic settings** → *Channel secret* → `REMINDARR_LINE_CHANNEL_SECRET`.
+   - **Messaging API** → *Channel access token (long-lived)* → Issue →
+     `REMINDARR_LINE_CHANNEL_ACCESS_TOKEN`.
+
+   Both are required. Setting only one is a startup error, not a silently
+   disabled platform.
+4. Official Account Manager → response settings: turn **ON** *Use webhook*,
+   and turn **OFF** *Auto-reply messages* and *Greeting messages*. Otherwise
+   LINE answers alongside remindarr and every message gets two replies.
+5. Start remindarr and make `…:8080/line/webhook` reachable over HTTPS.
+6. Developers Console → Messaging API → *Webhook URL*: set it to your public
+   URL, e.g. `https://example.com/line/webhook`, and press **Verify**. LINE
+   sends an empty, signed test request; remindarr answers 200.
+7. **Add the bot as a friend** (scan the QR code on the Messaging API tab),
+   then message it. Pushes only reach people who have friended the account.
+
+#### The quota, and what it costs you
+
+On the free plan in Japan, LINE allows **200 counted messages a month**, as a
+hard cap with no pay-as-you-go. What counts:
+
+- **Scheduled reminders count** — each is a *push*. A reminder delivered to a
+  group counts once per member: one reminder to a group of five is five.
+- **Replies are free** — confirmations, `/list`, `/help` and error messages go
+  back on LINE's reply path, which is not metered. remindarr never retries a
+  failed reply as a push.
+
+When the month's quota runs out, LINE refuses pushes, and remindarr marks the
+affected reminders failed (with "LINE monthly message limit reached") rather
+than retrying into a wall. There is no warning before that point yet.
+
+#### Things LINE does not tell you
+
+- **A user who blocked the account is undetectable.** LINE answers a push to
+  them with 200 as though it were delivered. remindarr cannot tell, so neither
+  can you.
+- **Group messages from some clients have no user id.** LINE omits it for
+  users not on LINE for iOS/Android. remindarr cannot tell who owns such a
+  reminder, so it replies saying so instead of setting one.
+- **Webhook redelivery is off by default.** If you turn it on, remindarr
+  ignores duplicate events — but it remembers them in memory, so a redelivery
+  arriving after a restart is processed again.
+
 ### Docker
 
 ```bash
@@ -151,7 +215,10 @@ may be owned by something else; `chown` it to 1000 or add
 `user: "<uid>:<gid>"` to the compose service. Skipping this gives an opaque
 `unable to open database file` at startup.
 
-There is no `ports:` section, deliberately — both adapters connect outbound.
+There is no published port by default, deliberately — Telegram and Discord
+connect outbound. If you enable LINE, the container listens on 8080; uncomment
+the `ports:` example in `docker-compose.yml` or put your ingress on the same
+Docker network. How LINE reaches it is up to you.
 
 ---
 
@@ -222,6 +289,11 @@ All via environment or `.env`, prefix `REMINDARR_`:
 |---|---|---|
 | `REMINDARR_TELEGRAM_TOKEN` | — | enables Telegram |
 | `REMINDARR_DISCORD_TOKEN` | — | enables Discord |
+| `REMINDARR_LINE_CHANNEL_SECRET` | — | with the token below, enables LINE |
+| `REMINDARR_LINE_CHANNEL_ACCESS_TOKEN` | — | with the secret above, enables LINE |
+| `REMINDARR_WEBHOOK_HOST` | `0.0.0.0` | webhook listen address (LINE only) |
+| `REMINDARR_WEBHOOK_PORT` | `8080` | webhook listen port (LINE only) |
+| `REMINDARR_LINE_WEBHOOK_PATH` | `/line/webhook` | webhook path LINE posts to |
 | `REMINDARR_DATABASE_URL` | `sqlite+aiosqlite:///data/remindarr.db` | store |
 | `REMINDARR_DEFAULT_TIMEZONE` | `Asia/Tokyo` | for subscribers not yet seen |
 | `REMINDARR_TICK_SECONDS` | `15` | scheduler poll interval |
@@ -274,9 +346,10 @@ moment to add migrations — not before.
 
 **Next up**
 
-- **LINE.** The real differentiator — dominant in Japan, skipped by most
-  Western self-hosted tools. Brings the first webhook requirement and a quota
-  model where push is metered and reply is not.
+- **LINE, for real.** The adapter is built — the differentiator, dominant in
+  Japan, skipped by most Western self-hosted tools. Still to come: a first
+  real round trip, deployment ingress, and a warning before the monthly push
+  quota runs out.
 - **Recurring reminders.** The schema has a reserved `recurrence` column; v0
   writes `NULL` and never reads it.
 
