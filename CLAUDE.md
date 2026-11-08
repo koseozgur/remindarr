@@ -157,13 +157,15 @@ push delivery (retry-keyed via `OutgoingMessage.idempotency_key`). 179 tests.
 Cloudflare quick tunnel from the dev Mac → reply → scheduled push delivered on
 time. The owner has a free LINE Official Account (Japan, Communication plan:
 200 counted pushes/month, hard cap; replies are free). Its Basic ID is
-deliberately not recorded in this public repo. The owner does not use
-Telegram; Telegram and Discord have still never had a real round trip.
+deliberately not recorded in this public repo. Discord had its first real
+round trip the same day (on the VM). The owner does not use Telegram, which has
+never had a real round trip.
 
 **Decided (2026-11-08):**
-- **Production ingress: a free-tier GCP e2-micro in a US region** (the VM, a
-  30 GB disk and one external IPv4 are all inside the free tier, per the
-  Cloud Billing Catalog). It's isolated from the home network, which stays
+- **Production ingress: a free-tier GCP e2-micro in a US region.** Per the
+  Cloud Billing Catalog, the VM and up to 30 GB of `pd-standard` disk are
+  free; one external IPv4 is free for the first 720 hours a month, so about
+  ¥19 in 31-day months. It's isolated from the home network, which stays
   inbound-closed apart from WireGuard. Use billing account
   **"My Billing Account 1"**: that's where the AI Pro Gen AI & Cloud credit
   lands (about ¥1,600/month, each month's grant valid 12 months, managed in
@@ -183,13 +185,35 @@ before anything is stored. Verified live the same day: the unlisted owner was
 refused and got their id, then was added and could set a reminder, which was
 delivered.
 
+**Deployed (2026-11-08):** a dedicated `remindarr-*` GCP project (find it with
+`gcloud projects list`), VM `remindarr`
+(e2-micro, us-west1-b, 20 GB `pd-standard`), behind Caddy with a Let's
+Encrypt cert on an interim `<ip>.sslip.io` hostname, and only `/line/webhook`
+proxied. SSH is IAP-only. Secrets live only in `/etc/remindarr/remindarr.env`
+(root, 0600). Runbook: `docs/deploy-gcp.md`. The LINE console points at the
+permanent URL; the dev quick tunnel is no longer needed. Both LINE and Discord
+run there.
+
+**Cross-app delivery (2026-11-08):** `REMINDARR_PEOPLE` links one person's
+identities, with an optional default delivery app. The owner's default is
+Discord: capture on LINE (replies are free), deliver on Discord (unlimited),
+which keeps the 200/month LINE cap out of play. Discord always delivers by DM;
+if the DM is refused it falls back to the capture channel with a single
+setter mention. Every Discord send blocks all other mentions. `@line`,
+`@discord` and `@telegram` reroute one reminder. Any other `@word` stays as
+reminder text, and is reserved for `@person` later.
+
 **Next:**
-1. Deploy to the GCP VM (stable webhook URL; the tunnel URL changes every run).
-   The deploy needs the LINE credentials and `REMINDARR_ALLOWED_USERS` on the
-   VM.
-2. A warning before the 200/month quota runs out.
+1. Remind other people: `do the thing @user2 tomorrow 9pm`, resolving
+   `@name` (and Discord `<@id>` mentions) via `REMINDARR_PEOPLE`. Open
+   questions: who may remind whom, whose timezone, and how the recipient sees
+   who set it.
+2. A warning before the 200/month LINE quota runs out (less urgent now that
+   the owner's deliveries go to Discord).
 3. Recurring reminders (the `recurrence` column is reserved and unused).
 4. Location triggers, which must not be allowed to slide off the roadmap.
 
-Small follow-ups: behind a tunnel, `line.bad_signature` logs every caller as
-127.0.0.1; persistent dedupe if webhook redelivery is turned on in production.
+Small follow-ups: move from sslip.io to the owner's own domain; automated
+DB backups; `line.bad_signature` logs the proxy's address rather than the
+caller's; `/list` covering all of a person's apps; persistent dedupe if
+webhook redelivery is turned on.
