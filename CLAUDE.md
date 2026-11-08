@@ -164,8 +164,11 @@ Telegram; Telegram and Discord have still never had a real round trip.
 - **Production ingress: a free-tier GCP e2-micro in a US region** (the VM, a
   30 GB disk and one external IPv4 are all inside the free tier, per the
   Cloud Billing Catalog). It's isolated from the home network, which stays
-  inbound-closed apart from WireGuard. The owner's billing account
-  `billing` is open, and an AI Pro $10/month GCP credit exists as a buffer.
+  inbound-closed apart from WireGuard. Use billing account
+  **"My Billing Account 1"**: that's where the AI Pro Gen AI & Cloud credit
+  lands (about ¥1,600/month, each month's grant valid 12 months, managed in
+  Google Builders Hub → Benefits). It was reopened 2026-11-08 so the credit is
+  usable. A second open account, `billing`, also exists.
   Home port-forwarding was rejected: double NAT, DSM owns 443, and it would
   be the home LAN's first internet-facing TCP service.
 - **Mobile: native iOS, later, on Apple's free tier first** (own phone only,
@@ -174,14 +177,19 @@ Telegram; Telegram and Discord have still never had a real round trip.
   TestFlight for family; defer it until those are actually wanted. LINE is
   the family-reaching surface; the app complements it rather than replacing it.
 
+**Access control done (2026-11-08):** `REMINDARR_ALLOWED_USERS`
+(`platform:user_id`, comma-separated), deny by default, enforced in the core
+before anything is stored. Verified live the same day: the unlisted owner was
+refused and got their id, then was added and could set a reminder, which was
+delivered.
+
 **Next:**
-1. **Access control before any 24/7 deploy.** Anyone who friends the bot
-   can set reminders, and each one spends the owner's 200/month push quota.
-   That needs an allow-list of permitted platform user IDs.
-2. Deploy to the GCP VM (stable webhook URL; the tunnel URL changes every run).
-3. A warning before the 200/month quota runs out.
-4. Recurring reminders (the `recurrence` column is reserved and unused).
-5. Location triggers, which must not be allowed to slide off the roadmap.
+1. Deploy to the GCP VM (stable webhook URL; the tunnel URL changes every run).
+   The deploy needs the LINE credentials and `REMINDARR_ALLOWED_USERS` on the
+   VM.
+2. A warning before the 200/month quota runs out.
+3. Recurring reminders (the `recurrence` column is reserved and unused).
+4. Location triggers, which must not be allowed to slide off the roadmap.
 
 Small follow-ups: behind a tunnel, `line.bad_signature` logs every caller as
 127.0.0.1; persistent dedupe if webhook redelivery is turned on in production.
