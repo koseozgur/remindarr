@@ -11,12 +11,12 @@ dependencies = [
     "discord.py==2.7.1",
     # The [asyncio] extra pulls in greenlet, without which every async DB call
     # raises at runtime -- not just in tests.
-    "sqlalchemy[asyncio]==2.0.52",
+    "sqlalchemy[asyncio]==2.1.8",
     "aiosqlite==0.22.1",
-    "pydantic==2.13.4",
-    "pydantic-settings==2.15.0",
+    "pydantic==2.14.3",
+    "pydantic-settings==2.16.2",
     "structlog==26.1.0",
-    "tzdata==2026.3",
+    "tzdata==2026.6",
 ]
 
 [project.scripts]
@@ -24,11 +24,10 @@ remindarr = "remindarr.__main__:main"
 
 [dependency-groups]
 dev = [
-    "pytest==9.1.1",
-    "pytest-asyncio==1.4.0",
-    "ruff==0.16.3",
-    "mypy==2.3.1",
-    "freezegun==1.5.5",
+    "pytest==9.2.0",
+    "pytest-asyncio==1.4.1.post1",
+    "ruff==0.17.4",
+    "mypy==2.4.1",
 ]
 
 [build-system]
@@ -55,3 +54,6 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 python_version = "3.13"
 strict = true
 files = ["src", "tests"]
+# Teaches mypy pydantic's real constructor semantics -- e.g. that Settings
+# accepts _env_file and coerces a str into a SecretStr.
+plugins = ["pydantic.mypy"]
