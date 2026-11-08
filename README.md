@@ -150,11 +150,15 @@ out of sync with whether the credential is actually there.
 LINE needs two credentials and a public HTTPS URL (see
 [Inbound ports](#inbound-ports-none-unless-you-enable-line)).
 
-1. Create a free **LINE Official Account** (via the
-   [LINE Official Account Manager](https://manager.line.biz/) or the
-   [LINE Developers Console](https://developers.line.biz/console/)).
-2. In the Official Account Manager, **enable the Messaging API** for it. This
-   creates a Messaging API channel in the Developers Console.
+1. Create a free **LINE Official Account**:
+   [register a Business ID](https://account.line.biz/signup?redirectUri=https://entry.line.biz/form/entry/unverified)
+   (your normal LINE account works), then fill in the
+   [entry form](https://entry.line.biz/form/entry/unverified). The Developers
+   Console can no longer create Messaging API channels itself (since 2024).
+2. In the [Official Account Manager](https://manager.line.biz/), **enable the
+   Messaging API**. You'll pick a provider, which can't be changed later. This
+   creates the Messaging API channel in the
+   [Developers Console](https://developers.line.biz/console/).
 3. Developers Console → your channel:
    - **Basic settings** → *Channel secret* → `REMINDARR_LINE_CHANNEL_SECRET`.
    - **Messaging API** → *Channel access token (long-lived)* → Issue →
@@ -162,13 +166,15 @@ LINE needs two credentials and a public HTTPS URL (see
 
    Both are required. Setting only one is a startup error, not a silently
    disabled platform.
-4. Official Account Manager → response settings: turn **ON** *Use webhook*,
-   and turn **OFF** *Auto-reply messages* and *Greeting messages*. Otherwise
-   LINE answers alongside remindarr and every message gets two replies.
+4. Turn **OFF** *Greeting messages* and *Auto-reply messages*: Developers
+   Console → Messaging API tab → *Edit* next to each, which opens the Official
+   Account Manager. Otherwise LINE answers alongside remindarr and every
+   message gets two replies.
 5. Start remindarr and make `…:8080/line/webhook` reachable over HTTPS.
 6. Developers Console → Messaging API → *Webhook URL*: set it to your public
    URL, e.g. `https://example.com/line/webhook`, and press **Verify**. LINE
-   sends an empty, signed test request; remindarr answers 200.
+   sends an empty, signed test request; remindarr answers 200. Then turn on
+   **Use webhook** on the same tab.
 7. **Add the bot as a friend** (scan the QR code on the Messaging API tab),
    then message it. Pushes only reach people who have friended the account.
 
