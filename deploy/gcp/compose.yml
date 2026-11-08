@@ -1,0 +1,66 @@
+# Production stack for the GCP VM: remindarr behind Caddy, which terminates
+# HTTPS (Let's Encrypt, automatic) and forwards only the LINE webhook path.
+# remindarr's own port is never published on the host.
+#
+# Runbook: docs/deploy-gcp.md. Run from this directory on the VM:
+#   sudo docker compose up -d --build
+
+name: remindarr
+
+services:
+  remindarr:
+    build:
+      context: ../..
+    image: remindarr:local
+    restart: unless-stopped
+
+    # Secrets live only on the VM (root-owned, mode 0600), never in git.
+    env_file: /etc/remindarr/remindarr.env
+
+    environment:
+      # Absolute path -- note the four slashes after the scheme.
+      REMINDARR_DATABASE_URL: sqlite+aiosqlite:////data/remindarr.db
+      REMINDARR_WEBHOOK_HOST: 0.0.0.0
+      REMINDARR_WEBHOOK_PORT: "8080"
+
+    volumes:
+      # Bind mount so the database is a plain file on the VM's disk, owned by
+      # the container's uid 1000.
+      - /var/lib/remindarr:/data
+
+    # Reachable by Caddy on the compose network only.
+    expose:
+      - "8080"
+
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2.11.9
+    restart: unless-stopped
+    depends_on:
+      - remindarr
+
+    # REMINDARR_HOST (the public hostname) -- not a secret, but per-deploy.
+    env_file: /etc/remindarr/caddy.env
+
+    ports:
+      # 80 for the ACME HTTP-01 challenge and the HTTP->HTTPS redirect.
+      - "80:80"
+      - "443:443"
+
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and the ACME account. Losing this means re-issuing,
+      # which counts against Let's Encrypt's rate limits.
+      - caddy-data:/data
+      - caddy-config:/config
+
+    logging: *logging
+
+volumes:
+  caddy-data:
+  caddy-config:

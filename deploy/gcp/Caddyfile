@@ -1,0 +1,16 @@
+# HTTPS for {$REMINDARR_HOST} with an automatic Let's Encrypt certificate.
+# HTTP is redirected to HTTPS automatically; port 80 also answers ACME.
+#
+# Only the LINE webhook path reaches remindarr. Everything else -- including
+# the scanners that will find this host within hours -- gets a bare 404 from
+# Caddy and never touches the app.
+
+{$REMINDARR_HOST} {
+	handle /line/webhook {
+		reverse_proxy remindarr:8080
+	}
+
+	handle {
+		respond 404
+	}
+}

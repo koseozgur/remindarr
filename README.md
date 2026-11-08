@@ -234,6 +234,10 @@ connect outbound. If you enable LINE, the container listens on 8080; uncomment
 the `ports:` example in `docker-compose.yml` or put your ingress on the same
 Docker network. How LINE reaches it is up to you.
 
+One worked example: [`docs/deploy-gcp.md`](docs/deploy-gcp.md) runs it on a
+free-tier GCP `e2-micro` behind Caddy (automatic HTTPS, only the webhook path
+forwarded), with the cost model, updates, backups and teardown.
+
 ### Access control
 
 remindarr answers only the people you list. **It denies by default:** with
