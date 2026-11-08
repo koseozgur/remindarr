@@ -32,8 +32,9 @@ from remindarr.config import Settings
 from . import service
 from .clock import utcnow
 from .db import session_scope
+from .delivery import setter_name
 from .humanize import format_delta
-from .models import Reminder, ReminderState
+from .models import Reminder, ReminderState, Subscriber
 from .types import OutgoingMessage, Route
 
 log = structlog.get_logger(__name__)
@@ -105,7 +106,7 @@ class Scheduler:
 
             message = OutgoingMessage(
                 route=Route(reminder.delivery_platform, reminder.delivery_address),
-                text=self._render(reminder, now),
+                text=await self._render(session, reminder, now),
                 fallback=(
                     Route(reminder.delivery_platform, reminder.fallback_address)
                     if reminder.fallback_address is not None
@@ -151,8 +152,9 @@ class Scheduler:
             error=error,
         )
 
-    def _render(self, reminder: Reminder, now: datetime) -> str:
-        """Reminder text, plus an honest note when it is arriving late.
+    async def _render(self, session: AsyncSession, reminder: Reminder, now: datetime) -> str:
+        """Reminder text, who set it if it is for someone else, and an honest
+        note when it is arriving late.
 
         Silently delivering a two-hour-old reminder as if it were on time is
         worse than being late -- the user cannot tell whether they misread the
@@ -161,6 +163,13 @@ class Scheduler:
         lateness = now - reminder.due_at
         grace = self.settings.late_delivery_grace_minutes * 60
         body = f"⏰ {reminder.text}"
+        if reminder.recipient is not None:
+            setter = await session.get(Subscriber, reminder.subscriber_id)
+            if setter is not None:
+                by = setter_name(
+                    self.settings, setter.platform, setter.platform_user_id, setter.display_name
+                )
+                body += f" (from {by})"
         if lateness.total_seconds() > grace:
             body += f"\n(this was due {format_delta(-lateness)} — delivered late)"
         return body

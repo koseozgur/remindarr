@@ -128,6 +128,9 @@ class Reminder(Base):
     delivery_platform: Mapped[str] = mapped_column(String(32))
     delivery_address: Mapped[str] = mapped_column(String(128))
     fallback_address: Mapped[str | None] = mapped_column(String(128), default=None)
+    recipient: Mapped[str | None] = mapped_column(String(64), default=None)
+    """The ``REMINDARR_PEOPLE`` name it was set for, when that is not the
+    setter. The setter still owns it; the recipient is told who set it."""
     """On ``delivery_platform``: where to deliver if ``delivery_address`` (a
     direct-message address) is refused -- the chat the reminder was set in."""
 
