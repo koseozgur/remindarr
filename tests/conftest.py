@@ -47,6 +47,13 @@ def settings() -> Settings:
         max_delivery_attempts=3,
         retry_backoff_seconds=30.0,
         late_delivery_grace_minutes=60,
+        # Every user id the shared tests send as. Access control itself is
+        # tested in test_access.py.
+        allowed_users=frozenset(
+            f"{platform}:{uid}"
+            for platform in ("telegram", "discord")
+            for uid in ("u1", "u2", "42", "alice", "bob", "mallory")
+        ),
     )
 
 

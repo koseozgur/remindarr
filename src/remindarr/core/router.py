@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from remindarr.config import Settings
@@ -26,6 +27,8 @@ from .humanize import format_when
 from .models import ReminderState, Subscriber
 from .timeparse import TimeParseError, parse
 from .types import IncomingMessage, Reply, Route
+
+log = structlog.get_logger(__name__)
 
 HELP = """\
 I set reminders. Tell me what and when:
@@ -54,6 +57,17 @@ class Router:
         text = message.text.strip()
         if not text:
             return None
+
+        # Before anything touches the database: a stranger gets no subscriber
+        # row, no reminder, and no command -- not even /help. The reply carries
+        # their id in the exact config format, which is how the owner finds
+        # their own. On LINE a reply is free, so this cannot be used to burn
+        # push quota.
+        sender = message.sender
+        if not self.settings.is_allowed(sender.platform, sender.user_id):
+            entry = f"{sender.platform}:{sender.user_id}"
+            log.info("access.denied", user=entry, route=str(message.route))
+            return Reply(f"Not authorised. Ask the owner to add: {entry}")
 
         now = self.clock()
         async with session_scope(self.session_factory) as session:

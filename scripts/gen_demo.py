@@ -98,7 +98,11 @@ async def transcript() -> list[tuple[str, str]]:
     factory = async_sessionmaker(engine, expire_on_commit=False)
 
     clock = Clock(START)
-    settings = Settings(database_url="sqlite+aiosqlite://", default_timezone="Asia/Tokyo")
+    settings = Settings(
+        database_url="sqlite+aiosqlite://",
+        default_timezone="Asia/Tokyo",
+        allowed_users=frozenset({"telegram:demo"}),
+    )
     router = Router(settings=settings, session_factory=factory, clock=clock)
     recorder = Recorder()
     registry = DeliveryRegistry()

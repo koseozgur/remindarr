@@ -55,6 +55,18 @@ def build_adapters(settings: Settings) -> list[object]:
     return adapters
 
 
+def warn_if_nobody_allowed(settings: Settings) -> None:
+    """Deny-by-default would otherwise make a fresh install look broken."""
+    if not settings.allowed_users:
+        log.warning(
+            "access.allow_list_empty",
+            hint=(
+                "REMINDARR_ALLOWED_USERS is empty, so the bot will refuse everyone. "
+                "Message it once: the refusal includes your platform:user_id to add."
+            ),
+        )
+
+
 async def run(settings: Settings) -> None:
     adapters = build_adapters(settings)
     if not adapters:
@@ -63,6 +75,8 @@ async def run(settings: Settings) -> None:
             "REMINDARR_DISCORD_TOKEN, and/or both REMINDARR_LINE_CHANNEL_SECRET and "
             "REMINDARR_LINE_CHANNEL_ACCESS_TOKEN (see .env.example)."
         )
+
+    warn_if_nobody_allowed(settings)
 
     engine = create_engine(settings.database_url)
     await init_schema(engine)
