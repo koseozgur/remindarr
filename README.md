@@ -11,7 +11,7 @@
   <img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white">
   <img alt="Typed: mypy strict" src="https://img.shields.io/badge/mypy-strict-2A6DB2">
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/badge/lint-ruff-D7FF64"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-179-3fb950">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-202-3fb950">
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
@@ -127,6 +127,12 @@ uv run remindarr
 A bot is enabled by having a token. There is no separate on/off flag to fall
 out of sync with whether the credential is actually there.
 
+**The first reply you get will be a refusal.** Nobody may use the bot until
+they are on the allow-list, and that includes you. Message the bot once; it
+answers `Not authorised. Ask the owner to add: telegram:123456789` (or
+`discord:…`, `line:U…`). Put that in `.env` as `REMINDARR_ALLOWED_USERS`,
+restart, and it works. See [Access control](#access-control).
+
 ### Getting a Telegram token
 
 1. Message [@BotFather](https://t.me/BotFather), send `/newbot`, follow prompts.
@@ -184,7 +190,9 @@ On the free plan in Japan, LINE allows **200 counted messages a month**, as a
 hard cap with no pay-as-you-go. What counts:
 
 - **Scheduled reminders count** — each is a *push*. A reminder delivered to a
-  group counts once per member: one reminder to a group of five is five.
+  group counts once per member: one reminder to a group of five is five. Only
+  allowed users can set reminders, but an allowed user's group reminders are
+  still billed per member — the allow-list does not change that.
 - **Replies are free** — confirmations, `/list`, `/help` and error messages go
   back on LINE's reply path, which is not metered. remindarr never retries a
   failed reply as a push.
@@ -225,6 +233,44 @@ There is no published port by default, deliberately — Telegram and Discord
 connect outbound. If you enable LINE, the container listens on 8080; uncomment
 the `ports:` example in `docker-compose.yml` or put your ingress on the same
 Docker network. How LINE reaches it is up to you.
+
+### Access control
+
+remindarr answers only the people you list. **It denies by default:** with
+`REMINDARR_ALLOWED_USERS` unset or empty it refuses everyone, and logs
+`access.allow_list_empty` at startup so a fresh install does not look broken.
+
+This matters most on LINE, where a bot's Basic ID is searchable: anyone can
+friend it, and every reminder a stranger set would spend your monthly push
+quota. On Telegram and Discord the cost is a stranger's data in your database.
+
+**Finding your id:** message the bot. A refusal names you in the exact format
+to paste:
+
+```
+Not authorised. Ask the owner to add: line:U4af4980629...
+```
+
+The same id is logged at INFO as `access.denied`. On LINE the refusal is a
+reply, so it costs no quota.
+
+**Format:** comma-separated `platform:user_id` entries, spaces allowed:
+
+```bash
+REMINDARR_ALLOWED_USERS=line:U4af4980629..., telegram:123456789, discord:987654321
+```
+
+- The platform is `telegram`, `discord` or `line`, case-insensitive. The user
+  id is case-sensitive and must match exactly. A malformed entry or an unknown
+  platform is a startup error, not a silently ignored line.
+- It is per platform: `discord:42` does not allow `telegram:42`.
+- In a group, the check is on the **person who sent the message**, not the
+  group. An allowed user can set reminders in a group with strangers in it.
+  The strangers cannot, and get the same refusal. A LINE group message with no
+  user id ([see above](#things-line-does-not-tell-you)) is always refused.
+- A refused user gets no subscriber row, no reminder, and no command — not
+  even `/help`.
+- It is configuration: change it and restart. There are no admin commands.
 
 ---
 
@@ -295,6 +341,7 @@ All via environment or `.env`, prefix `REMINDARR_`:
 |---|---|---|
 | `REMINDARR_TELEGRAM_TOKEN` | — | enables Telegram |
 | `REMINDARR_DISCORD_TOKEN` | — | enables Discord |
+| `REMINDARR_ALLOWED_USERS` | — (nobody) | who may use the bot, `platform:user_id,…` ([details](#access-control)) |
 | `REMINDARR_LINE_CHANNEL_SECRET` | — | with the token below, enables LINE |
 | `REMINDARR_LINE_CHANNEL_ACCESS_TOKEN` | — | with the secret above, enables LINE |
 | `REMINDARR_WEBHOOK_HOST` | `0.0.0.0` | webhook listen address (LINE only) |
