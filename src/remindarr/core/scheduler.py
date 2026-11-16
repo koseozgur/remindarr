@@ -33,6 +33,7 @@ from . import service
 from .clock import utcnow
 from .db import session_scope
 from .delivery import setter_name
+from .directory import load as load_directory
 from .humanize import format_delta
 from .models import Reminder, ReminderState, Subscriber
 from .types import OutgoingMessage, Route
@@ -176,8 +177,9 @@ class Scheduler:
         if reminder.recipient is not None:
             setter = await session.get(Subscriber, reminder.subscriber_id)
             if setter is not None:
+                people = await load_directory(session, self.settings)
                 by = setter_name(
-                    self.settings, setter.platform, setter.platform_user_id, setter.display_name
+                    people, setter.platform, setter.platform_user_id, setter.display_name
                 )
                 body += f" (from {by})"
         series = service.series_of(reminder)

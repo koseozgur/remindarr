@@ -10,7 +10,9 @@ import structlog
 
 from remindarr.adapters.base import CaptureAdapter, DeliveryAdapter, DeliveryRegistry
 from remindarr.config import Settings
-from remindarr.core.db import create_engine, create_session_factory, init_schema
+from remindarr.core.clock import utcnow
+from remindarr.core.db import create_engine, create_session_factory, init_schema, session_scope
+from remindarr.core.directory import BootstrapResult, bootstrap
 from remindarr.core.router import Router
 from remindarr.core.scheduler import Scheduler
 
@@ -55,15 +57,20 @@ def build_adapters(settings: Settings) -> list[object]:
     return adapters
 
 
-def warn_if_nobody_allowed(settings: Settings) -> None:
+def warn_if_nobody_allowed(result: BootstrapResult) -> None:
     """Deny-by-default would otherwise make a fresh install look broken."""
-    if not settings.allowed_users:
+    if result.users == 0:
         log.warning(
             "access.allow_list_empty",
             hint=(
-                "REMINDARR_ALLOWED_USERS is empty, so the bot will refuse everyone. "
-                "Message it once: the refusal includes your platform:user_id to add."
+                "Nobody is in yet, so the bot will refuse everyone. Message it once: the "
+                "refusal shows your platform:user_id. Put it in REMINDARR_ADMINS and restart."
             ),
+        )
+    elif result.admins == 0:
+        log.warning(
+            "access.no_admin",
+            hint="No admin, so nobody can /invite. Set REMINDARR_ADMINS to a user's name.",
         )
 
 
@@ -76,13 +83,16 @@ async def run(settings: Settings) -> None:
             "REMINDARR_LINE_CHANNEL_ACCESS_TOKEN (see .env.example)."
         )
 
-    warn_if_nobody_allowed(settings)
-
     engine = create_engine(settings.database_url)
     await init_schema(engine)
     session_factory = create_session_factory(engine)
 
+    async with session_scope(session_factory) as session:
+        result = await bootstrap(session, settings, now=utcnow())
+    warn_if_nobody_allowed(result)
+
     router = Router(settings=settings, session_factory=session_factory)
+    router._bootstrapped = True
 
     # The protocols are runtime-checkable, so an adapter declares which halves
     # of the contract it implements simply by having the methods. A

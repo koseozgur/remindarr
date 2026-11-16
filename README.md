@@ -11,7 +11,7 @@
   <img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white">
   <img alt="Typed: mypy strict" src="https://img.shields.io/badge/mypy-strict-2A6DB2">
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/badge/lint-ruff-D7FF64"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-426-3fb950">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-462-3fb950">
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
@@ -23,8 +23,8 @@
 <p align="center"><sub>Generated from the real code — see <a href="#how-it-works">How it works</a>.</sub></p>
 
 **Status: v0, in daily use.** One-shot reminders on LINE, Discord and
-Telegram, SQLite, an allow-list, and cross-app delivery (set it on LINE, get it
-on Discord). **LINE and Discord were verified live on 2026-11-08**, including
+Telegram, SQLite, invite-only access managed in chat, and cross-app delivery
+(set it on LINE, get it on Discord). **LINE and Discord were verified live on 2026-11-08**, including
 the allow-list's refusal path. **Telegram is implemented and tested but has
 never made a real round trip.** See [Roadmap](#roadmap) for what is
 deliberately not here yet.
@@ -136,10 +136,11 @@ A bot is enabled by having a token. There is no separate on/off flag to fall
 out of sync with whether the credential is actually there.
 
 **The first reply you get will be a refusal.** Nobody may use the bot until
-they are on the allow-list, and that includes you. Message the bot once; it
-answers `Not authorised. Ask the owner to add: telegram:123456789` (or
-`discord:…`, `line:U…`). Put that in `.env` as `REMINDARR_ALLOWED_USERS`,
-restart, and it works. See [Access control](#access-control).
+they're in, and that includes you. Message the bot once; the refusal ends with
+your id, like `(For the owner: telegram:123456789)`. Put that in `.env` as
+`REMINDARR_ADMINS`, restart, and you're in as the admin. Everyone after you
+joins with an invite from chat, with no more config. See
+[People and access](#people-and-access).
 
 ### Getting a Telegram token
 
@@ -200,7 +201,7 @@ hard cap with no pay-as-you-go. What counts:
 - **Scheduled reminders count** — each is a *push*. A reminder delivered to a
   group counts once per member: one reminder to a group of five is five. Only
   allowed users can set reminders, but an allowed user's group reminders are
-  still billed per member — the allow-list does not change that.
+  still billed per member — access control doesn't change that.
 - **Replies are free** — confirmations, `/list`, `/help` and error messages go
   back on LINE's reply path, which is not metered. remindarr never retries a
   failed reply as a push.
@@ -250,56 +251,83 @@ One worked example: [`docs/deploy-gcp.md`](docs/deploy-gcp.md) runs it on a
 free-tier GCP `e2-micro` behind Caddy (automatic HTTPS, only the webhook path
 forwarded), with the cost model, updates, backups and teardown.
 
-### Access control
+### People and access
 
-remindarr answers only the people you list. **It denies by default:** with
-`REMINDARR_ALLOWED_USERS` unset or empty it refuses everyone, and logs
-`access.allow_list_empty` at startup so a fresh install does not look broken.
+remindarr answers only the people who are in. **It denies by default:** a
+fresh install refuses everyone, and logs `access.allow_list_empty` at startup
+so it doesn't look broken.
 
 This matters most on LINE, where a bot's Basic ID is searchable: anyone can
 friend it, and every reminder a stranger set would spend your monthly push
 quota. On Telegram and Discord the cost is a stranger's data in your database.
 
-**Finding your id:** message the bot. A refusal names you in the exact format
-to paste:
+**You, the first admin.** Message the bot once. The refusal ends with your id
+in the exact format to paste:
 
 ```
-Not authorised. Ask the owner to add: line:U4af4980629...
+Not authorised. If you have an invite, send /join followed by the code.
+(For the owner: line:U4af4980629...)
 ```
 
-The same id is logged at INFO as `access.denied`. On LINE the refusal is a
-reply, so it costs no quota.
-
-**Format:** comma-separated `platform:user_id` entries, spaces allowed:
+Put it in `.env` and restart:
 
 ```bash
-REMINDARR_ALLOWED_USERS=line:U4af4980629..., telegram:123456789, discord:987654321
+REMINDARR_ADMINS=line:U4af4980629...
 ```
 
-- The platform is `telegram`, `discord` or `line`, case-insensitive. The user
-  id is case-sensitive and must match exactly. A malformed entry or an unknown
-  platform is a startup error, not a silently ignored line.
-- It is per platform: `discord:42` does not allow `telegram:42`.
+An admin entry that belongs to nobody yet becomes a new user called `owner`.
+Entries can also be names of existing users (`REMINDARR_ADMINS=owner`). It's
+applied at every start and only ever grants admin.
+
+**Everyone else: invites, in chat.** No config edits, no restarts:
+
+```
+you:  /invite mum
+bot:  Ask mum to send me this on Discord or LINE within 24 hours:
+      /join E96M-QVZS
+mum:  /join E96M-QVZS
+bot:  Welcome, mum! You're in.
+```
+
+**Your other apps: `/link`.** Send `/link` on one app and it gives you a
+code. Send `/link CODE` from the other app within 10 minutes, and both are
+you. That's also how remindarr knows it's really you on both: you just proved
+it from each side.
+
+**Admin commands:** `/users` lists who's in, and `/remove <name>` takes
+someone out. Removing someone unlinks their apps and cancels their pending
+reminders, including ones others set for them. You can't remove yourself.
+
+**The codes.** Each is 8 characters, shown as `XXXX-XXXX`, with no
+look-alike letters. Lowercase, a missing hyphen, or `o` for `0` and `l` for
+`1` still work. Invites last 24 hours and link codes 10 minutes. Each works
+once, and only a hash is stored. Five wrong codes from one account, or fifty
+overall, block code entry for an hour. A wrong, expired and used code all get
+the same answer, so a guess learns nothing.
+
 - In a group, the check is on the **person who sent the message**, not the
   group. An allowed user can set reminders in a group with strangers in it.
   The strangers cannot, and get the same refusal. A LINE group message with no
   user id ([see above](#things-line-does-not-tell-you)) is always refused.
-- A refused user gets no subscriber row, no reminder, and no command — not
-  even `/help`.
-- It is configuration: change it and restart. There are no admin commands.
-- Linking identities into a person ([below](#cross-app-delivery)) grants no
-  access. Every identity in `REMINDARR_PEOPLE` must also be in the allow-list,
-  or startup fails and says which one is missing.
+- A refused user gets no subscriber row, no reminder, and no command, not
+  even `/help`. The one thing a stranger can do is redeem a code.
+
+**Upgrading from the env-file allow-list.** On the first start with no users
+in the database, `REMINDARR_ALLOWED_USERS` and `REMINDARR_PEOPLE` are imported
+once, so an existing install keeps working. After that the database is the
+source of truth, and editing those two changes nothing. An allow-list entry
+that isn't in a person is imported as a user named after it
+(`telegram-123456`), credited by their chat display name, and can't be
+`@`-named.
 
 ### Cross-app delivery
 
 By default a reminder arrives where you set it. To set reminders on one app
-and get them on another, tell remindarr which identities are one person and
-where that person wants them:
+and get them on another, [link](#people-and-access) both apps to you with
+`/link`, then pick where you want them:
 
-```bash
-REMINDARR_ALLOWED_USERS=line:U4af4980629..., discord:987654321
-REMINDARR_PEOPLE=ozgur = line:U4af4980629..., discord:987654321 > discord
+```
+/deliver discord
 ```
 
 Now a reminder set in your one-to-one LINE chat arrives as a Discord DM, and
@@ -316,15 +344,9 @@ are capped at 200 a month ([details](#the-quota-and-what-it-costs-you)). If
 you capture on LINE and deliver on Discord, every LINE message is a free
 reply, and the cap stops mattering.
 
-**Syntax.** People are separated by `;`. Each is
-`name = platform:id, platform:id`, optionally followed by `> app`, the app
-reminders are delivered on. Names are lowercase letters, digits, `-` and `_`.
-Without `> app`, reminders still arrive where they were set. These are
-startup errors, not silent misreadings:
-
-- an identity that is in two people, or not in the allow-list;
-- two identities on one platform for the same person;
-- a default app the person has no identity on, or one that is not enabled.
+`/deliver` on its own shows the current choice, and `/deliver here` goes back
+to "wherever I set it". You can only pick an app you've linked and that is
+running here; anything else is refused, saying why.
 
 **The default applies to one-to-one chats only.** A reminder set in a LINE or
 Telegram group goes back to that group. A group reminder is for the group.
@@ -350,8 +372,7 @@ the time parser follows: never silently eat part of the task. So:
 
 - only `@line`, `@discord` and `@telegram` are acted on; any other `@word`
   (`email @john about the invoice tomorrow`) stays in the reminder as written;
-- for the same reason, a person in `REMINDARR_PEOPLE` cannot be named after
-  an app;
+- for the same reason, nobody can be named after an app;
 - two apps in one message, an app you have no linked identity on, or an app
   that is not enabled are all refused, saying why.
 
@@ -370,11 +391,11 @@ typed. On Discord every message is sent with mentions disabled, so
 exception is the channel fallback's mention of the person the reminder is for.
 
 One limit: each app's identity still has its own reminders. `/list` and
-`/cancel` on Discord do not see what you set on LINE.
+`/cancel` on Discord don't see what you set on LINE.
 
 ### Reminding someone else
 
-Name a person from `REMINDARR_PEOPLE` with `@`:
+Name someone who's in with `@`:
 
 ```
 take out the bins @mum tomorrow at 21:00
@@ -388,17 +409,16 @@ id 12
 It'll go to mum as a direct message on LINE, marked “from oz”.
 ```
 
-At 21:00 mum gets `⏰ take out the bins (from oz)`. The "from" is your name
-in `REMINDARR_PEOPLE`, or your display name if you are not in it.
+At 21:00 mum gets `⏰ take out the bins (from oz)`. The "from" is your
+user name, or your chat display name if you were imported without one.
 
 - **Which app:** add `@line` or `@discord` to choose (`@mum @line`).
   Otherwise it goes to mum's default app if she has one, or to her only app.
   If she has several and no default, remindarr asks you to pick rather than
   guess. A person with no identity on the app you asked for is refused.
 - **On Discord**, a real mention (`@mum` picked from the member list, which
-  Discord sends as `<@id>`) works too, if that account is in
-  `REMINDARR_PEOPLE`. A name or mention that is not a person stays in the
-  text as written.
+  Discord sends as `<@id>`) works too, if that account is linked to a user.
+  A name or mention that isn't a user stays in the text as written.
 - **It is yours.** It is parsed in your timezone. It shows in your `/list`
   (`#12 take out the bins — … → mum on LINE`), and only you can `/cancel` it.
   Mum does not see it until it arrives.
@@ -407,9 +427,9 @@ in `REMINDARR_PEOPLE`, or your display name if you are not in it.
 - **Discord fallback.** If mum's Discord DMs are closed and you set it in a
   server channel, it falls back to that channel, mentioning mum and no one
   else.
-- **Who may remind whom:** anyone on the allow-list may remind anyone in
-  `REMINDARR_PEOPLE`. There is no consent step. This is meant for a trusted
-  household, where the owner already decided who is in the list.
+- **Who may remind whom:** anyone who's in may remind anyone else who's in.
+  There is no consent step. This is meant for a trusted household, where the
+  admin already decided who's invited.
 - **Quota:** a reminder delivered to someone by LINE push counts against the
   200/month cap exactly as your own would.
 
@@ -562,8 +582,9 @@ All via environment or `.env`, prefix `REMINDARR_`:
 |---|---|---|
 | `REMINDARR_TELEGRAM_TOKEN` | — | enables Telegram |
 | `REMINDARR_DISCORD_TOKEN` | — | enables Discord |
-| `REMINDARR_ALLOWED_USERS` | — (nobody) | who may use the bot, `platform:user_id,…` ([details](#access-control)) |
-| `REMINDARR_PEOPLE` | — | identities that are one person, and where they get reminders ([details](#cross-app-delivery)) |
+| `REMINDARR_ADMINS` | — | admins, as names or `platform:user_id`; an unknown identity becomes the first user ([details](#people-and-access)) |
+| `REMINDARR_ALLOWED_USERS` | — | **seed only**: imported once into an empty database, then ignored ([details](#people-and-access)) |
+| `REMINDARR_PEOPLE` | — | **seed only**, like the above: identities that are one person, `name = platform:id, … > app` |
 | `REMINDARR_LINE_CHANNEL_SECRET` | — | with the token below, enables LINE |
 | `REMINDARR_LINE_CHANNEL_ACCESS_TOKEN` | — | with the secret above, enables LINE |
 | `REMINDARR_WEBHOOK_HOST` | `0.0.0.0` | webhook listen address (LINE only) |

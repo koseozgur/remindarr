@@ -7,12 +7,12 @@ The default is where it was set. Four things change it:
   server channels: the reminder goes to the setter's DM, with the channel kept
   as a fallback in case the DM is refused. Where an adapter does not ask --
   LINE groups, say -- a reminder set in a group is for the group.
-* **A person's default app**, from ``REMINDARR_PEOPLE``, applied only to
+* **A person's default app** (``/deliver``), applied only to
   reminders set in a one-to-one chat.
 * **An explicit ``@app`` override** in the message (``@discord``, ``@line``,
   ``@telegram``), which always means "directly, on that app".
-* **A ``@person``** -- a name from ``REMINDARR_PEOPLE``, or on Discord a real
-  ``<@id>`` mention of someone in it -- sends the reminder to that person
+* **A ``@person``** -- a user's name, or on Discord a real
+  ``<@id>`` mention of a user -- sends the reminder to that person
   instead. The setter still owns it: it is in their ``/list``, and only they
   can cancel it.
 
@@ -27,10 +27,25 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Protocol
 
-from remindarr.config import KNOWN_PLATFORMS, PLATFORM_NAMES, Person, Settings
+from remindarr.config import KNOWN_PLATFORMS, PLATFORM_NAMES, Person
 
 from .types import IncomingMessage, Route, Sender
+
+
+class People(Protocol):
+    """Who's who, as routing needs it. The database-backed ``Directory`` in
+    production; ``Settings`` also fits, which keeps routing tests simple."""
+
+    @property
+    def people(self) -> tuple[Person, ...]: ...
+
+    @property
+    def enabled_platforms(self) -> list[str]: ...
+
+    def person_of(self, platform: str, user_id: str) -> Person | None: ...
+
 
 _AT_WORD = re.compile(r"(?<!\S)@([A-Za-z][\w-]*)(?!\S)")
 # Discord delivers a real mention as <@id> (or <@!id> from older clients).
@@ -69,14 +84,14 @@ class AtTokens:
     """People named, deduplicated, in order of appearance."""
 
 
-def read_at_tokens(text: str, settings: Settings, *, platform: str) -> AtTokens:
+def read_at_tokens(text: str, settings: People, *, platform: str) -> AtTokens:
     """Resolve ``@app``, ``@name`` and (on Discord) ``<@id>`` tokens.
 
     Platform words win over names: config refuses a person named ``line``, so
     there is never a clash. A token that resolves to nothing -- ``@john``, or
-    a mention of someone not in ``REMINDARR_PEOPLE`` -- stays as text.
+    a mention of someone who isn't a user -- stays as text.
     """
-    by_name = {p.name: p for p in settings.people}
+    by_name = {p.name: p for p in settings.people if not p.auto_named}
     spans: list[tuple[int, int]] = []
     apps: list[str] = []
     people: list[Person] = []
@@ -108,7 +123,7 @@ def read_at_tokens(text: str, settings: Settings, *, platform: str) -> AtTokens:
     return AtTokens(" ".join("".join(kept).split()), tuple(apps), unique)
 
 
-def resolve(message: IncomingMessage, text: str, settings: Settings) -> Delivery | Refusal:
+def resolve(message: IncomingMessage, text: str, settings: People) -> Delivery | Refusal:
     sender = message.sender
     tokens = read_at_tokens(text, settings, platform=sender.platform)
     if len(tokens.apps) > 1:
@@ -138,8 +153,8 @@ def resolve(message: IncomingMessage, text: str, settings: Settings) -> Delivery
     name = PLATFORM_NAMES[target]
     if user_id is None:
         return Refusal(
-            f"I don't know who you are on {name}. Ask the owner to link your {name} "
-            "account to this one in REMINDARR_PEOPLE."
+            f"I don't know who you are on {name}. Send /link here, then send the "
+            f"code I give you from {name}, to connect the two."
         )
 
     if target == sender.platform:
@@ -150,7 +165,7 @@ def resolve(message: IncomingMessage, text: str, settings: Settings) -> Delivery
 
 
 def _for_someone_else(
-    message: IncomingMessage, tokens: AtTokens, person: Person, settings: Settings
+    message: IncomingMessage, tokens: AtTokens, person: Person, settings: People
 ) -> Delivery | Refusal:
     platforms = sorted(i.partition(":")[0] for i in person.identities)
     if tokens.apps:
@@ -189,13 +204,13 @@ def _fallback(message: IncomingMessage, target: str) -> Route | None:
     return None
 
 
-def _unavailable(target: str, settings: Settings) -> Refusal | None:
+def _unavailable(target: str, settings: People) -> Refusal | None:
     if target in settings.enabled_platforms:
         return None
     return Refusal(f"{PLATFORM_NAMES[target]} isn't set up here, so I can't deliver there.")
 
 
-def _default(message: IncomingMessage, text: str, settings: Settings) -> Delivery:
+def _default(message: IncomingMessage, text: str, settings: People) -> Delivery:
     sender = message.sender
     if not message.direct:
         if message.deliver_privately:
@@ -207,20 +222,20 @@ def _default(message: IncomingMessage, text: str, settings: Settings) -> Deliver
         return Delivery(text, message.route)
     assert person.deliver_on is not None
     user_id = person.user_id_on(person.deliver_on)
-    # Settings guarantees a person has an identity on their default app.
+    # /deliver and the config import both refuse a default app the person isn't on.
     assert user_id is not None
     return Delivery(text, Route.direct_to(person.deliver_on, user_id))
 
 
-def setter_name(settings: Settings, platform: str, user_id: str, display_name: str) -> str:
+def setter_name(settings: People, platform: str, user_id: str, display_name: str) -> str:
     """How a reminder's recipient is told who set it: "(from oz)"."""
     person = settings.person_of(platform, user_id)
-    if person is not None:
+    if person is not None and not person.auto_named:
         return person.name
     return display_name or f"someone on {PLATFORM_NAMES.get(platform, platform)}"
 
 
-def disclosure(target: Delivery, here: Route, settings: Settings, sender: Sender) -> str | None:
+def disclosure(target: Delivery, here: Route, settings: People, sender: Sender) -> str | None:
     """What to tell the setter when the reminder will not arrive where they are."""
     route = target.route
     name = PLATFORM_NAMES.get(route.platform, route.platform)

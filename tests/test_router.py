@@ -75,24 +75,35 @@ class TestCreating:
         assert await router.handle(message("   ")) is None
 
 
+async def identity_rows(
+    factory: async_sessionmaker[AsyncSession], platform: str, user_id: str
+) -> list[Subscriber]:
+    """Rows for one identity. Allowed identities are imported up front, so
+    tests look up the sender rather than counting every row."""
+    async with factory() as s:
+        result = await s.execute(
+            select(Subscriber).where(
+                Subscriber.platform == platform, Subscriber.platform_user_id == user_id
+            )
+        )
+        return list(result.scalars())
+
+
 class TestSubscribers:
     async def test_first_message_creates_a_subscriber_with_default_tz(
         self, router: Router, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         await router.handle(message("/help"))
-        async with session_factory() as s:
-            subs = list((await s.execute(select(Subscriber))).scalars())
+        subs = await identity_rows(session_factory, "telegram", "u1")
         assert len(subs) == 1
         assert subs[0].timezone == "Asia/Tokyo"
-        assert subs[0].platform == "telegram"
 
     async def test_repeat_messages_reuse_one_subscriber(
         self, router: Router, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         for _ in range(3):
             await router.handle(message("x in 5m"))
-        async with session_factory() as s:
-            assert len(list((await s.execute(select(Subscriber))).scalars())) == 1
+        assert len(await identity_rows(session_factory, "telegram", "u1")) == 1
 
     async def test_same_user_id_on_another_platform_is_a_separate_subscriber(
         self, router: Router, session_factory: async_sessionmaker[AsyncSession]
@@ -108,8 +119,9 @@ class TestSubscribers:
                 received_at=NOW,
             )
         )
-        async with session_factory() as s:
-            assert len(list((await s.execute(select(Subscriber))).scalars())) == 2
+        [on_telegram] = await identity_rows(session_factory, "telegram", "42")
+        [on_discord] = await identity_rows(session_factory, "discord", "42")
+        assert on_telegram.id != on_discord.id
 
 
 class TestCommands:
@@ -184,8 +196,7 @@ class TestTimezone:
     ) -> None:
         reply = await router.handle(message("/tz Europe/Berlin"))
         assert reply is not None and "Europe/Berlin" in reply.text
-        async with session_factory() as s:
-            sub = (await s.execute(select(Subscriber))).scalar_one()
+        [sub] = await identity_rows(session_factory, "telegram", "u1")
         assert sub.timezone == "Europe/Berlin"
 
     async def test_rejects_nonsense(
@@ -193,8 +204,7 @@ class TestTimezone:
     ) -> None:
         reply = await router.handle(message("/tz Mars/Olympus_Mons"))
         assert reply is not None and "do not know" in reply.text
-        async with session_factory() as s:
-            sub = (await s.execute(select(Subscriber))).scalar_one()
+        [sub] = await identity_rows(session_factory, "telegram", "u1")
         assert sub.timezone == "Asia/Tokyo"
 
     async def test_new_timezone_changes_how_reminders_resolve(

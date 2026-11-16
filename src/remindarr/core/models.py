@@ -1,10 +1,15 @@
 """Persistence model.
 
-Two tables, deliberately. ``subscribers`` is who, ``reminders`` is what and when.
+``users`` is a human, ``subscribers`` is one of their chat identities,
+``reminders`` is what and when, and ``access_codes`` are the short-lived codes
+that bring a new identity in (``/join``, ``/link``).
+
+An identity is allowed to use the bot exactly when it is linked to a user.
+There is no separate allow-list to drift out of sync with that.
 
 The reminder's *delivery* route is stored separately from the subscriber who
-created it. In v0 they always match, but keeping them apart is what makes
-"capture on Telegram, deliver to Discord" a data change rather than a rewrite.
+created it, which is what makes "capture on LINE, deliver on Discord" a data
+change rather than a rewrite.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ import enum
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -70,12 +76,35 @@ class ReminderState(enum.StrEnum):
     FAILED = "failed"
 
 
-class Subscriber(Base):
-    """A person, as identified on one platform.
+class User(Base):
+    """One human, with any number of chat identities linked to them."""
 
-    Note the scope: this is a *platform* identity, not a global one. The same
-    human on Telegram and Discord is two rows. Linking them is a real feature
-    with real UX (proving you are both accounts) and is deliberately not in v0.
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    """Lowercase slug, unique: what ``@name`` and ``/remove name`` refer to."""
+
+    auto_named: Mapped[bool] = mapped_column(Boolean, default=False)
+    """Imported from a bare allow-list entry with no name given. Such a user
+    is credited by their chat display name and can't be ``@name``-d."""
+
+    deliver_on: Mapped[str | None] = mapped_column(String(32), default=None)
+    """Platform that reminders set in a one-to-one chat go to; ``None`` means
+    wherever they were set."""
+
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=utcnow)
+
+    identities: Mapped[list[Subscriber]] = relationship(back_populates="user")
+
+
+class Subscriber(Base):
+    """One chat identity: a person as one platform knows them.
+
+    Linked to a :class:`User` when allowed. The same human on LINE and Discord
+    is two rows pointing at one user; they prove both are theirs with
+    ``/link``.
     """
 
     __tablename__ = "subscribers"
@@ -88,9 +117,45 @@ class Subscriber(Base):
     platform_user_id: Mapped[str] = mapped_column(String(128))
     display_name: Mapped[str] = mapped_column(String(256), default="")
     timezone: Mapped[str] = mapped_column(String(64))
+    """Kept in step across a user's identities by ``/tz``."""
+
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=utcnow)
 
+    user: Mapped[User | None] = relationship(back_populates="identities")
     reminders: Mapped[list[Reminder]] = relationship(back_populates="subscriber")
+
+
+class CodeKind(enum.StrEnum):
+    INVITE = "invite"
+    """Made by an admin for a named newcomer; redeemed with ``/join``."""
+    LINK = "link"
+    """Made by a user; redeemed with ``/link`` from their other app."""
+
+
+class AccessCode(Base):
+    """A short-lived, single-use code. Only its hash is stored."""
+
+    __tablename__ = "access_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[CodeKind] = mapped_column(
+        SAEnum(
+            CodeKind,
+            native_enum=False,
+            length=16,
+            values_callable=lambda enum: [member.value for member in enum],
+        )
+    )
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
+    """LINK: whose identity this adds. INVITE: unset."""
+    invite_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    """INVITE: the name the newcomer will get."""
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    used_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), default=None)
 
 
 class Reminder(Base):

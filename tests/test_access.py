@@ -20,12 +20,25 @@ from structlog.testing import capture_logs
 from remindarr.adapters.line import LineAdapter
 from remindarr.app import warn_if_nobody_allowed
 from remindarr.config import Settings
+from remindarr.core.directory import BootstrapResult
 from remindarr.core.models import Reminder, Subscriber
-from remindarr.core.router import Router
+from remindarr.core.router import NOT_AUTHORISED, Router
 from remindarr.core.types import IncomingMessage, Route, Sender
 
 from .conftest import NOW
 from .test_line import SECRET, TOKEN, FakeLineApi, payload, sign, text_event
+
+
+async def stored(factory: async_sessionmaker[AsyncSession], platform: str, user_id: str) -> bool:
+    """Whether a subscriber row exists for this identity. Allowed identities
+    are imported as rows up front, so a stranger is checked by identity."""
+    async with factory() as s:
+        row = await s.execute(
+            select(Subscriber).where(
+                Subscriber.platform == platform, Subscriber.platform_user_id == user_id
+            )
+        )
+        return row.scalar_one_or_none() is not None
 
 
 def settings_with(allowed: str | None) -> Settings:
@@ -107,11 +120,12 @@ class TestRouter:
         with capture_logs() as logs:
             reply = await r.handle(msg("water the plants in 2 hours", user_id="Ustranger"))
         assert reply is not None
-        assert reply.text == "Not authorised. Ask the owner to add: line:Ustranger"
-        assert await count(session_factory, Subscriber) == 0
+        assert reply.text == NOT_AUTHORISED.format(identity="line:Ustranger")
+        assert not await stored(session_factory, "line", "Ustranger")
         assert await count(session_factory, Reminder) == 0
-        assert {"event": "access.denied", "user": "line:Ustranger"}.items() <= logs[0].items()
-        assert logs[0]["log_level"] == "info"
+        [denied] = [e for e in logs if e["event"] == "access.denied"]
+        assert denied["user"] == "line:Ustranger"
+        assert denied["log_level"] == "info"
 
     @pytest.mark.parametrize(
         "command", ["/help", "/start", "/list", "/tz Europe/Berlin", "/cancel 1"]
@@ -122,7 +136,7 @@ class TestRouter:
         r = router(settings_with("line:Uowner"), session_factory)
         reply = await r.handle(msg(command, user_id="Ustranger"))
         assert reply is not None and reply.text.startswith("Not authorised.")
-        assert await count(session_factory, Subscriber) == 0
+        assert not await stored(session_factory, "line", "Ustranger")
 
     async def test_same_id_on_another_platform_is_not_allowed(
         self, session_factory: async_sessionmaker[AsyncSession]
@@ -154,14 +168,19 @@ class TestRouter:
 class TestStartupWarning:
     def test_warns_when_nobody_is_allowed(self) -> None:
         with capture_logs() as logs:
-            warn_if_nobody_allowed(settings_with(None))
+            warn_if_nobody_allowed(BootstrapResult(users=0, admins=0, imported=False))
         assert [(e["event"], e["log_level"]) for e in logs] == [
             ("access.allow_list_empty", "warning")
         ]
 
-    def test_silent_when_someone_is_allowed(self) -> None:
+    def test_warns_when_nobody_can_invite(self) -> None:
         with capture_logs() as logs:
-            warn_if_nobody_allowed(settings_with("line:Uowner"))
+            warn_if_nobody_allowed(BootstrapResult(users=2, admins=0, imported=True))
+        assert [(e["event"], e["log_level"]) for e in logs] == [("access.no_admin", "warning")]
+
+    def test_silent_when_someone_is_in_and_an_admin_exists(self) -> None:
+        with capture_logs() as logs:
+            warn_if_nobody_allowed(BootstrapResult(users=1, admins=1, imported=False))
         assert logs == []
 
 
@@ -204,5 +223,5 @@ class TestOverLine:
 
         [(path, _, sent)] = fake.requests
         assert path == "/v2/bot/message/reply"
-        assert sent["messages"][0]["text"] == "Not authorised. Ask the owner to add: line:Ustranger"
-        assert await count(session_factory, Subscriber) == 0
+        assert sent["messages"][0]["text"] == NOT_AUTHORISED.format(identity="line:Ustranger")
+        assert not await stored(session_factory, "line", "Ustranger")
