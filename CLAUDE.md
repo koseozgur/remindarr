@@ -235,23 +235,39 @@ proxied. SSH is IAP-only. Secrets live only in `/etc/remindarr/remindarr.env`
 permanent URL; the dev quick tunnel is no longer needed. Both LINE and Discord
 run there.
 
-**Cross-app delivery (2026-11-08):** `REMINDARR_PEOPLE` links one person's
-identities, with an optional default delivery app. The owner's default is
-Discord: capture on LINE (replies are free), deliver on Discord (unlimited),
-which keeps the 200/month LINE cap out of play. Discord always delivers by DM;
-if the DM is refused it falls back to the capture channel with a single
-setter mention. Every Discord send blocks all other mentions. `@line`,
-`@discord` and `@telegram` reroute one reminder. Any other `@word` stays as
-reminder text, and is reserved for `@person` later.
+**Cross-app delivery (2026-11-08):** a person's linked identities share an
+optional default delivery app. The owner's default is Discord: capture on
+LINE (replies are free), deliver on Discord (unlimited), which keeps the
+200/month LINE cap out of play. Discord always delivers by DM; if the DM is
+refused it falls back to the capture channel with a single mention. Every
+Discord send blocks all other mentions. `@line`, `@discord` and `@telegram`
+reroute one reminder.
 
-**Remind other people: built, not merged.** PR #5 (`@person`), waiting for
-a second real person to test live. Defaults: any allowed user can remind
-anyone in `REMINDARR_PEOPLE`; times use the setter's timezone; the
-recipient sees "(from …)"; one recipient per reminder.
+**Remind other people (`@person`), merged 2026-11-17.** Any user can remind
+any other user; times use the setter's timezone; the recipient sees
+"(from …)"; one recipient per reminder. Not yet tested live with a second
+real person.
+
+**Recurring reminders, live 2026-11-17.** RRULEs (via `dateutil.rrule`) in the
+setter's timezone, with DST-stable wall-clock times. After downtime, one
+catch-up is delivered, not a burst. `/cancel` stops the series. The parser
+refuses anything it doesn't fully understand (`until`, `except`, `for N days`,
+`every last friday`, leftover times) rather than guess, because a misread
+series repeats forever. `take pills daily at 8` is refused; `every day at 8`
+works. Loosening that is a possible follow-up.
+
+**Users in the database, live 2026-11-17** (design: `docs/design/users-and-app-api.md`,
+phase 1). An identity is allowed exactly when it's linked to a user. Family
+join from chat: `/invite <name>` → `/join CODE`. `/link` connects a second
+app, `/deliver` sets the default app, and `/users` and `/remove` are for
+admins. Codes are hashed, single-use, short-lived and rate-limited.
+`REMINDARR_ADMINS=owner` is set on the VM. `REMINDARR_ALLOWED_USERS` and
+`REMINDARR_PEOPLE` are now seed-only: they were imported once into the fresh
+VM database at the 2026-11-17 deploy, and editing them does nothing now.
+Verified live by the owner the same day.
 
 **Roadmap (set 2026-11-17, ordered for family daily use):**
-1. **Recurring reminders.** The biggest gap for daily use; the `recurrence`
-   column is reserved and unused.
+1. ~~Recurring reminders.~~ Done, live 2026-11-17.
 2. **AI parser plugin.** Optional and provider-agnostic: **Claude by default
    (`claude-opus-5-5`)**, Gemini as an alternative. Japanese input is the
    headline. Needs the owner's Claude Console API key on the VM (spend limit
@@ -260,14 +276,28 @@ recipient sees "(from …)"; one recipient per reminder.
    reminder text goes to the provider, which the owner accepts.
 3. **Reliability, before family depends on it:** automated DB backups, and
    an alert if the bot goes down.
-4. **Family onboarding:** allow-list and people entries, a live test of PR #5,
-   a real name, and the bot's display names on LINE and Discord.
-5. **Lists (in the narrow form above) plus location triggers**, leading into
-   the native iOS app. Location triggers must not slide off the roadmap.
+4. **Family onboarding:** the mechanism is done (`/invite`). What's left is
+   inviting real family, a live test of `@person`, a real name, and the bot's
+   display names on LINE and Discord.
+5. **The iPhone app foundation:** phase 2 of the users design, i.e.
+   `/pair`, device tokens and the v1 API behind Caddy's `/api/*`. Xcode 27.2
+   works on the dev Mac (macOS 27.2.1), with the iOS simulator runtime
+   downloaded.
+6. **Lists (in the narrow form above) plus location triggers** in the native
+   iOS app. Location triggers must not slide off the roadmap.
+
+**Owner request (2026-11-17), once the app is running:** invites by
+**email** rather than a code pasted into chat. Not designed yet. It needs an
+outbound mail path (SPF/DKIM on a domain the owner controls, now on
+Cloudflare) and a decision on what the email carries: a code for the app, or
+a link. A link that opens the app directly needs Associated Domains, which
+likely means Apple's paid program. Email may also become a sign-in route for
+the app.
 
 **Pre-family housekeeping:** pick the real name, and move the endpoint from
-sslip.io to a subdomain of one of the owner's own domains (one DNS A record,
-added by the owner).
+sslip.io to a subdomain of one of the owner's own domains (`ozgurkose.com` or
+`ozkose.dev`, both being transferred to Cloudflare Registrar as of
+2026-11-17; one DNS A record, added by the owner).
 
 Small follow-ups: a warning before the 200/month LINE quota runs out (less
 urgent while the owner's deliveries go to Discord); `line.bad_signature` logs

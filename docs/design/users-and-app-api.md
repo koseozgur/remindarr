@@ -125,6 +125,12 @@ route, `/api/*`, and everything else stays 404.
 
 ## Open questions
 
+- **Invites by email** (owner request, 2026-11-17, for once the app is
+  running): send the invite to an email address instead of pasting a code
+  into chat. Open questions: the outbound mail path (provider, SPF/DKIM),
+  whether the email carries a code or a link that opens the app (Associated
+  Domains, likely the paid Apple program), and whether email also becomes a
+  sign-in route for the app.
 - **Does the app deliver reminders?** In phase 1 the app *shows and creates*
   reminders, and delivery stays on LINE/Discord. Local notifications on the
   phone would duplicate those, unless "app" becomes a delivery choice
