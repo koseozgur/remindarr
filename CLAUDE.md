@@ -1,11 +1,27 @@
 # Reminder app — project context
 
-Started 2026-08-18. **v0 is built and working end to end** (Telegram +
-Discord, one-shot reminders). This file is the brief, not a record — update it
-as real decisions get made and reality replaces intent.
+Started 2026-08-18. Live since 2026-11-08 on LINE and Discord. This file is
+the brief, not a record — update it as real decisions get made and reality
+replaces intent.
 
 **Working name is `remindarr` (the folder name), deliberately a placeholder.
-Pick a real name before anything is published.**
+Pick a real name before family uses it — they'll see it in LINE and Discord.**
+
+---
+
+## Direction (restarted 2026-11-17)
+
+**Goal: a daily driver for the owner and their family**, not a portfolio
+piece. The owner chose to keep building in this public repo (rather than
+fork or rewrite): an app real people use daily is the better CV piece
+anyway. Family data and ids never live in the repo, only on the VM and in
+local `.env` files. Everything built so far is kept and reused.
+
+Plugins are optional and provider-agnostic. The app must work fully with
+none configured, and a plugin is enabled by its credential being present
+(same rule as the chat adapters). Provider-specific credits are a deployment
+detail, never a design input: the owner happens to have Gemini credit, but
+nothing may depend on it.
 
 ---
 
@@ -17,6 +33,20 @@ already use, instead of asking them to live in another app.
 **One thing, done right.** Reminders. Not a project manager, not a note
 app, not a calendar. Scope discipline is the product — resist feature
 creep even when it's easy.
+
+**Lists are in scope only as things to be reminded about** (decided
+2026-11-17): "add milk to shopping", surfaced when you arrive home or at a
+shop. That's the owner's original Home Assistant use case and pairs with
+location triggers. A general list manager (sharing UI, due dates, sub-tasks,
+priorities) is out. That's the Todoist line, and this is where to hold it.
+
+**AI is an understanding layer, not an assistant** (decided 2026-11-17). An
+optional parser plugin turns messy or Japanese input into the same
+structured reminder the grammar produces: time, text, optional recurrence.
+The grammar runs first; AI only handles what the grammar can't parse. The
+model returns structured output that code validates, and the confirmation
+always states the resolved absolute time, so a misread is visible at once.
+The model never acts on its own: no chatting, no general assistant.
 
 ## Why it exists
 
@@ -214,17 +244,32 @@ setter mention. Every Discord send blocks all other mentions. `@line`,
 `@discord` and `@telegram` reroute one reminder. Any other `@word` stays as
 reminder text, and is reserved for `@person` later.
 
-**Next:**
-1. Remind other people: `do the thing @user2 tomorrow 9pm`, resolving
-   `@name` (and Discord `<@id>` mentions) via `REMINDARR_PEOPLE`. Open
-   questions: who may remind whom, whose timezone, and how the recipient sees
-   who set it.
-2. A warning before the 200/month LINE quota runs out (less urgent now that
-   the owner's deliveries go to Discord).
-3. Recurring reminders (the `recurrence` column is reserved and unused).
-4. Location triggers, which must not be allowed to slide off the roadmap.
+**Remind other people: built, not merged.** PR #5 (`@person`), waiting for
+a second real person to test live. Defaults: any allowed user can remind
+anyone in `REMINDARR_PEOPLE`; times use the setter's timezone; the
+recipient sees "(from …)"; one recipient per reminder.
 
-Small follow-ups: move from sslip.io to the owner's own domain; automated
-DB backups; `line.bad_signature` logs the proxy's address rather than the
-caller's; `/list` covering all of a person's apps; persistent dedupe if
-webhook redelivery is turned on.
+**Roadmap (set 2026-11-17, ordered for family daily use):**
+1. **Recurring reminders.** The biggest gap for daily use; the `recurrence`
+   column is reserved and unused.
+2. **AI parser plugin.** Optional and provider-agnostic: **Claude by default
+   (`claude-opus-5-5`)**, Gemini as an alternative. Japanese input is the
+   headline. Needs the owner's Claude Console API key on the VM (spend limit
+   set; the Max plan includes $100/month of API credit, but how it links to the
+   Console still needs checking). The grammar runs first. The parsed
+   reminder text goes to the provider, which the owner accepts.
+3. **Reliability, before family depends on it:** automated DB backups, and
+   an alert if the bot goes down.
+4. **Family onboarding:** allow-list and people entries, a live test of PR #5,
+   a real name, and the bot's display names on LINE and Discord.
+5. **Lists (in the narrow form above) plus location triggers**, leading into
+   the native iOS app. Location triggers must not slide off the roadmap.
+
+**Pre-family housekeeping:** pick the real name, and move the endpoint from
+sslip.io to a subdomain of one of the owner's own domains (one DNS A record,
+added by the owner).
+
+Small follow-ups: a warning before the 200/month LINE quota runs out (less
+urgent while the owner's deliveries go to Discord); `line.bad_signature` logs
+the proxy's address rather than the caller's; `/list` covering all of a
+person's apps; persistent dedupe if webhook redelivery is turned on.
