@@ -501,3 +501,95 @@ class TestReplies:
 
 def test_now_is_the_documented_tuesday() -> None:
     assert NOW.astimezone(TZ) == local(2026, 8, 18, 10, 30)
+
+
+class TestReviewRegressions:
+    """Each exact string from the PR #6 review. With a series, a guess repeats
+    forever, so anything the grammar did not fully consume is refused."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # 1. Qualifiers or times left after a head-anchored repeat.
+            "every monday at 9 until june",
+            "every day at 9 except weekends",
+            "every day for a week take pills",
+            "every monday take the bins out at 7pm",
+            "every morning at 7 run",
+            "every day at 8am and 8pm take pills",
+            # 3. nth-weekday repeats.
+            "pay bills every last friday",
+            "every first monday pay rent",
+            # 4. A later repeat must not swallow an earlier one.
+            "take pills every day at 8 and every night",
+            # 5. Repeat words used as repeats are still refused.
+            "take pills daily at 8",
+            "daily at 8 take pills",
+        ],
+    )
+    def test_refused(self, text: str) -> None:
+        with pytest.raises(RepeatError, match="can't repeat"):
+            parse(text, now_utc=NOW, tz=TZ)
+
+    @pytest.mark.parametrize(
+        ("text", "task", "pattern", "first"),
+        [
+            # 2. Punctuation after a head time ends it.
+            ("every monday at 7pm: bins out", "bins out", "every Mon at 19:00",
+             local(2026, 8, 24, 19)),
+            ("every day at 8am, take pills", "take pills", "every day at 08:00",
+             local(2026, 8, 19, 8)),
+            ("every day at 8am — take pills", "take pills", "every day at 08:00",
+             local(2026, 8, 19, 8)),
+        ],
+    )  # fmt: skip
+    def test_separator_after_a_head_repeat(
+        self, text: str, task: str, pattern: str, first: datetime
+    ) -> None:
+        parsed = parse(text, now_utc=NOW, tz=TZ)
+        assert parsed.text == task
+        assert parsed.recurrence is not None
+        assert Series.parse(parsed.recurrence).describe() == pattern
+        assert parsed.due_at == first
+
+    @pytest.mark.parametrize(
+        ("text", "task", "due"),
+        [
+            # 2. The same bug existed for one-offs.
+            ("tomorrow at 9, call mom", "call mom", local(2026, 8, 19, 9)),
+            ("tomorrow at 9 - call mom", "call mom", local(2026, 8, 19, 9)),
+            ("tomorrow at 9: call mom", "call mom", local(2026, 8, 19, 9)),
+            # 5. Repeat words that are just task text.
+            ("daily standup tomorrow at 9", "daily standup", local(2026, 8, 19, 9)),
+            ("weekly report on friday", "weekly report", local(2026, 8, 21, 9)),
+            # 3. "every last" that is not a repeat.
+            ("check every last detail tomorrow", "check every last detail",
+             local(2026, 8, 19, 9)),
+            # Qualifiers are only refused after a repeat.
+            ("practice piano for 20 minutes tomorrow at 9", "practice piano for 20 minutes",
+             local(2026, 8, 19, 9)),
+        ],
+    )  # fmt: skip
+    def test_one_offs_keep_their_text(self, text: str, task: str, due: datetime) -> None:
+        parsed = parse(text, now_utc=NOW, tz=TZ)
+        assert parsed.recurrence is None
+        assert parsed.text == task
+        assert parsed.due_at == due
+
+    def test_a_second_time_in_a_one_off_is_refused(self) -> None:
+        # Previously: tomorrow at 09:00, text "call mom at 7pm".
+        with pytest.raises(TimeParseError, match="more than one time"):
+            parse("call mom at 7pm tomorrow", now_utc=NOW, tz=TZ)
+
+    async def test_list_states_one_zone_after_tz_change(self, h: Harness) -> None:
+        # 6. Set in Tokyo, then /tz: pattern and next occurrence must agree.
+        await h.say("pills every day at 8am")
+        await h.say("/tz America/New_York")
+        line = (await h.say("/list")).splitlines()[1]
+        assert line.endswith(
+            "🔁 pills — every day at 08:00 Asia/Tokyo time, next Wed 19 Aug 08:00 (in 21 hours)"
+        )
+
+    async def test_list_names_no_zone_when_it_matches(self, h: Harness) -> None:
+        await h.say("pills every day at 8am")
+        assert "Asia/Tokyo" not in await h.say("/list")

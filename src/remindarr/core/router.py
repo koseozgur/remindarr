@@ -173,8 +173,13 @@ class Router:
                 when = format_when(r.due_at, tz, now_utc=now)
                 lines.append(f"  #{r.id} {r.text} — {when}{where}")
             else:
-                nxt = format_next(r.due_at, tz, now_utc=now)
-                lines.append(f"  #{r.id} 🔁 {r.text} — {series.describe()}, next {nxt}{where}")
+                # Pattern and next occurrence in the same zone: the series'
+                # own, named when a later /tz has made it differ from yours.
+                zone, pattern = tz, series.describe()
+                if not series.utc_timeline and series.tz.key != tz.key:
+                    zone, pattern = series.tz, f"{pattern} {series.tz.key} time"
+                nxt = format_next(r.due_at, zone, now_utc=now)
+                lines.append(f"  #{r.id} 🔁 {r.text} — {pattern}, next {nxt}{where}")
         return Reply("\n".join(lines))
 
     async def _cancel(

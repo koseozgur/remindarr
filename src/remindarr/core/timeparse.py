@@ -455,13 +455,44 @@ _ORD = r"(?:st|nd|rd|th)?"
 _REPEAT_HINT = re.compile(
     r"(?:^|\s)(?:every|each)\s+(?:\d|other\b|few\b|couple\b|"
     rf"(?:day|weekday|weekend|week|fortnight|month|year|hour|hr|minute|min|second|sec|"
-    rf"morning|afternoon|evening|night|noon|midnight|{_WEEKDAY_ALT})s?\b)",
+    rf"morning|afternoon|evening|night|noon|midnight|{_WEEKDAY_ALT})s?\b|"
+    # "every last friday", "every first monday of the month": nth-weekday
+    # repeats the grammar does not do. Scoped to a following day or unit, so
+    # "check every last detail tomorrow" stays a one-off.
+    rf"(?:last|first|second|third|fourth|fifth|next)\s+"
+    rf"(?:day|weekday|weekend|week|month|year|{_WEEKDAY_ALT})s?\b)",
     re.IGNORECASE,
 )
-# The same words beside a one-off time: "take pills daily at 8" is a repeat
-# the grammar does not speak, not a one-off reminder to "take pills daily".
+# The same words used as a repeat: "take pills daily at 8" is a repeat the
+# grammar does not speak, not a one-off reminder to "take pills daily". Only
+# where the reading is unambiguous -- right beside a clock time, or ending the
+# task -- so "daily standup tomorrow at 9" and "weekly report on friday" stay
+# one-offs with their text intact.
 _REPEAT_WORD = r"(?:daily|nightly|weekly|fortnightly|monthly|yearly|annually|hourly)"
-_REPEAT_WORD_EDGE = re.compile(rf"^{_REPEAT_WORD}\b|\b{_REPEAT_WORD}$", re.IGNORECASE)
+_CLOCKISH = r"\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?"
+_REPEAT_WORD_USE = re.compile(
+    rf"\b{_REPEAT_WORD}\s+{_AT}\d|\b{_CLOCKISH}\s+{_REPEAT_WORD}\b|\b{_REPEAT_WORD}$",
+    re.IGNORECASE,
+)
+
+# Timing words left in the task text after a match: the user said more about
+# *when* than the grammar consumed, so whatever we set would be wrong -- for a
+# repeat, wrong forever. "every monday at 9 until june" must not repeat
+# forever with the text "until june", and "every morning at 7 run" must not
+# fire at 09:00. A clock time is refused after any match. A second time-like
+# "every" (``_REPEAT_HINT``) and qualifiers ("until", "except", "for a week")
+# are refused only after a repeat, since "practice piano for 20 minutes
+# tomorrow at 9" is a perfectly good one-off.
+_LEFTOVER_CLOCK = re.compile(
+    rf"(?:^|\s){_AT}\d|\b\d{{1,2}}(?:[:.]\d{{2}})?\s*(?:am|pm|a\.m\.|p\.m\.)(?![a-z])",
+    re.IGNORECASE,
+)
+_LEFTOVER_QUALIFIER = re.compile(
+    rf"\b(?:until|till|til|except|excluding|apart\s+from|starting|from\s+now)\b"
+    rf"|\bfor\s+(?:\d+|an?|a\s+few|a\s+couple\s+of|the\s+next)\s+(?:{_UNIT_ALT}){_UNIT_END}"
+    rf"|(?:^|\s)and\s+{_CLOCKISH}(?![a-z])",
+    re.IGNORECASE,
+)
 
 
 def _cant_repeat(hint: str = "") -> RepeatError:
@@ -622,7 +653,10 @@ def _anchored(patterns: list[tuple[str, object]]) -> list[tuple[re.Pattern[str],
     out: list[tuple[re.Pattern[str], object, object]] = []
     for anchored, take_remainder in (
         (r"(?:^|\s+){pattern}\s*$", _remainder_before),
-        (r"^{pattern}(?:\s+|$)", _remainder_after),
+        # A separator may end a head time: "tomorrow at 9, call mom" and
+        # "every monday at 7pm: bins out". Without it, the regex backtracks to
+        # "tomorrow" alone and leaves "at 9," in the task text.
+        (r"^{pattern}(?:\s*[,;:\-–—]\s*|\s+|$)", _remainder_after),  # noqa: RUF001
     ):
         for pattern, handler in patterns:
             regex = re.compile(anchored.format(pattern=pattern), re.IGNORECASE)
@@ -656,6 +690,16 @@ def parse(text: str, *, now_utc: datetime, tz: ZoneInfo) -> ParsedReminder:
         task = take_remainder(body, m)  # type: ignore[operator]
         if not task:
             raise TimeParseError(_NOT_A_REMINDER)
+        leftover = (
+            _LEFTOVER_CLOCK.search(task)
+            or _LEFTOVER_QUALIFIER.search(task)
+            or _REPEAT_HINT.search(task)
+        )
+        if leftover:
+            raise _cant_repeat(
+                f"I don't understand “{leftover.group(0).strip()}” in a repeat. "
+                f"Put one time right after the repeat, like “every monday at 7pm bins out”"
+            )
         series, warnings = _resolve_repeat(m, repeat, now_utc, tz)
         return ParsedReminder(
             text=task,
@@ -665,7 +709,7 @@ def parse(text: str, *, now_utc: datetime, tz: ZoneInfo) -> ParsedReminder:
             recurrence=series.serialize(),
         )
 
-    if _REPEAT_HINT.search(body) or _REPEAT_WORD_EDGE.search(body):
+    if _REPEAT_HINT.search(body) or _REPEAT_WORD_USE.search(body):
         raise _cant_repeat()
 
     for regex, handler, take_remainder in _ANCHORED_ONE_OFFS:
@@ -676,8 +720,13 @@ def parse(text: str, *, now_utc: datetime, tz: ZoneInfo) -> ParsedReminder:
         task = take_remainder(body, m)  # type: ignore[operator]
         if not task:
             raise TimeParseError(_NOT_A_REMINDER)
-        if _REPEAT_WORD_EDGE.search(task):
+        if _REPEAT_WORD_USE.search(task):
             raise _cant_repeat()
+        leftover = _LEFTOVER_CLOCK.search(task)
+        if leftover:
+            raise TimeParseError(
+                f"that has more than one time in it (“{leftover.group(0).strip()}”) -- give it one"
+            )
         due_utc = resolution.when.astimezone(UTC)
         if due_utc <= now_utc:
             raise TimeParseError(f"{resolution.when:%Y-%m-%d %H:%M} is in the past")

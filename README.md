@@ -11,7 +11,7 @@
   <img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white">
   <img alt="Typed: mypy strict" src="https://img.shields.io/badge/mypy-strict-2A6DB2">
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/badge/lint-ruff-D7FF64"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-376-3fb950">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-400-3fb950">
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
@@ -446,7 +446,9 @@ every hour / every 2 hours
 
 The repeat can sit at the end (`take pills every day at 9`) or the start
 (`every monday at 9 call mom`), and a time may come before it
-(`call mom at 7pm every day`). The confirmation states the pattern and the next
+(`call mom at 7pm every day`). A head time may end with `,` `:` or a dash
+(`every monday at 7pm: bins out`), as can a one-off's (`tomorrow at 9, call
+mom`). The confirmation states the pattern and the next
 occurrence in absolute terms:
 
 ```
@@ -475,8 +477,14 @@ How it behaves:
 - **A series keeps the timezone it was set in.** A later `/tz` affects new
   reminders, not existing repeats.
 - **Not supported, on purpose:** anything more often than hourly, end dates
-  (`until june`), `every 2 weeks` with no day, the last weekday of a month, and
-  `daily` / `weekly` (say `every day`).
+  and exceptions (`until june`, `except weekends`, `for a week`), two times in
+  one repeat (`at 8am and 8pm`, or a time left in the task text), `every 2
+  weeks` with no day, nth weekdays (`every last friday`), and `daily` /
+  `weekly` used as a repeat (`take pills daily at 8`; say `every day`).
+  `daily standup tomorrow at 9` is still a one-off. All of these are refused,
+  never guessed: with a repeat, a guess repeats forever.
+- **`/list` after `/tz`** shows a series in its own zone and names it
+  (`every day at 08:00 Asia/Tokyo time, next …`).
 
 Scheduling: one row carries the whole series. After an occurrence is delivered
 — or given up on after retries, or failed permanently — `due_at` moves to the
