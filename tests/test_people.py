@@ -221,7 +221,9 @@ class TestOverride:
         assert resolve(m, text, settings_with(None)) == Delivery(text, m.route)
 
     def test_at_word_is_kept_through_to_the_stored_reminder(self) -> None:
-        tokens = read_at_tokens("email @john about the invoice @discord tomorrow")
+        tokens = read_at_tokens(
+            "email @john about the invoice @discord tomorrow", settings_with(None), platform="line"
+        )
         assert tokens == AtTokens("email @john about the invoice tomorrow", ("discord",))
 
     def test_two_targets_are_refused(self) -> None:
@@ -244,15 +246,16 @@ class TestOverride:
 class TestWording:
     def test_disclosure_only_when_elsewhere(self) -> None:
         here = Route("line", LINE_ID)
-        assert disclosure(here, here) is None
-        assert (
-            disclosure(Route("discord", f"user:{DISCORD_ID}"), Route("discord", "chan"))
-            == "I'll DM you when it's due."
-        )
-        assert (
-            disclosure(Route("discord", f"user:{DISCORD_ID}"), here)
-            == "It'll arrive as a direct message on Discord."
-        )
+        s = settings_with(None)
+        me = Sender("line", LINE_ID, "")
+
+        def said(route: Route, where: Route) -> str | None:
+            return disclosure(Delivery("x", route), where, s, me)
+
+        assert said(here, here) is None
+        dm = Route("discord", f"user:{DISCORD_ID}")
+        assert said(dm, Route("discord", "chan")) == "I'll DM you when it's due."
+        assert said(dm, here) == "It'll arrive as a direct message on Discord."
 
     def test_list_labels(self) -> None:
         here = Route("line", LINE_ID)

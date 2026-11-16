@@ -40,6 +40,7 @@ I set reminders. Tell me what and when:
   take the bins out every monday at 7pm
 
 Add @line, @discord or @telegram to have it delivered on that app instead.
+Add @name to remind someone else on the owner's list of people.
 
 Commands:
   /list          what is pending
@@ -135,6 +136,7 @@ class Router:
             due_at=parsed.due_at,
             route=target.route,
             fallback=target.fallback,
+            recipient=target.recipient,
             now=now,
             recurrence=parsed.recurrence,
         )
@@ -145,7 +147,7 @@ class Router:
         else:
             when = format_when(parsed.due_at, tz, now_utc=now)
         lines = [f"Got it — “{parsed.text}” {when}.", f"id {reminder.id}"]
-        where = delivery.disclosure(target.route, message.route)
+        where = delivery.disclosure(target, message.route, self.settings, message.sender)
         if where is not None:
             lines.append(where)
         lines.extend(f"note: {w}" for w in parsed.warnings)
@@ -164,7 +166,9 @@ class Router:
             return Reply("Nothing pending.")
         lines = ["Pending:"]
         for r in pending:
-            where = delivery.label(Route(r.delivery_platform, r.delivery_address), here)
+            where = delivery.label(
+                Route(r.delivery_platform, r.delivery_address), here, r.recipient
+            )
             # "#3", not "3.": Discord renders "3. text" as a markdown ordered
             # list (renumbered, with extra spacing). "#3" with no space after
             # it is plain text everywhere.
