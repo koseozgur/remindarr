@@ -11,7 +11,7 @@
   <img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white">
   <img alt="Typed: mypy strict" src="https://img.shields.io/badge/mypy-strict-2A6DB2">
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/badge/lint-ruff-D7FF64"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-282-3fb950">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-376-3fb950">
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
@@ -384,14 +384,15 @@ remind me to check the burn-in in 45 minutes
 water the plants on saturday morning
 rent is due on 1 september
 deploy freeze 2026-09-03 14:00
+take the bins out every monday at 7pm
 ```
 
 Commands:
 
 | | |
 |---|---|
-| `/list` | what is pending, as `#id text — when` |
-| `/cancel <id>` | drop one (`/cancel 3` or `/cancel #3`) |
+| `/list` | what is pending, as `#id text — when`; repeats are marked 🔁 |
+| `/cancel <id>` | drop one (`/cancel 3` or `/cancel #3`); for a repeat, the whole series |
 | `/tz <zone>` | set your timezone, IANA name (`/tz Asia/Tokyo`) |
 | `/help` | the above |
 
@@ -426,6 +427,74 @@ Two ambiguities are resolved by *disclosure* rather than by guessing well:
 
 Every confirmation echoes the resolved absolute time, so a wrong guess is
 visible immediately rather than at the moment the reminder does not fire.
+
+### Recurring reminders
+
+Say `every`. The same narrow-grammar rule applies: a short list of forms, and
+anything outside it gets **"I can't repeat that yet"** with examples, never a
+guess.
+
+```
+every day at 9 / every 3 days / every other day / every morning
+every weekday at 8:00 / every weekend at 10
+every monday at 7pm / every mon and thu at 18:00 / every mon, wed and fri
+every week on friday / every 2 weeks on friday / every other week on thu at 7am
+every month on the 25th / every month on the 1st / every 3 months on the 2nd
+every year on 3 sep / every year on sep 3rd at 8pm
+every hour / every 2 hours
+```
+
+The repeat can sit at the end (`take pills every day at 9`) or the start
+(`every monday at 9 call mom`), and a time may come before it
+(`call mom at 7pm every day`). The confirmation states the pattern and the next
+occurrence in absolute terms:
+
+```
+Got it — “standup” every weekday at 08:00, next: Wed 19 Aug 08:00 (in 21 hours).
+```
+
+How it behaves:
+
+- **Times are read as written.** A repeat always names its days, so `at 9` is
+  09:00 — like `tomorrow at 9`, and unlike a bare `at 9`, which picks the
+  soonest reading. A series' time must not depend on the moment it was set.
+  Without am/pm the confirmation says how `9` was read. With no time at all,
+  09:00; `every morning` / `afternoon` / `evening` / `night` mean 09:00 / 14:00
+  / 19:00 / 20:00.
+- **Day-level repeats start at the soonest match.** `every 2 weeks on friday`
+  said on a Saturday starts the coming Friday, then every second Friday from
+  there.
+- **Month ends:** `every month on the 31st` falls on the *last day* of shorter
+  months (30 Sep, 28 Feb). For a reminder ("pay rent") that beats the RFC 5545
+  default of skipping those months. `every year on 29 feb` is 28 Feb in other
+  years.
+- **Wall-clock time holds across DST.** `every day at 08:00` stays at 08:00
+  local when the offset changes. A time inside a spring-forward gap fires an
+  hour later on the wall clock that day; a time in the repeated fall-back hour
+  fires once. `every hour` is always 60 minutes apart in real time.
+- **A series keeps the timezone it was set in.** A later `/tz` affects new
+  reminders, not existing repeats.
+- **Not supported, on purpose:** anything more often than hourly, end dates
+  (`until june`), `every 2 weeks` with no day, the last weekday of a month, and
+  `daily` / `weekly` (say `every day`).
+
+Scheduling: one row carries the whole series. After an occurrence is delivered
+— or given up on after retries, or failed permanently — `due_at` moves to the
+next occurrence after now, so a single failure never ends the series and
+`/cancel` stops all of it. Each occurrence has its own `due_at`, and so its own
+LINE retry key, while retries of one occurrence share theirs. If the process
+was down across several occurrences, you get **one** catch-up, for the most
+recent missed occurrence and marked late, then the series carries on from the
+next future one. Never a burst. A delivered repeat says so:
+
+```
+⏰ take pills
+(repeats every day at 21:00)
+```
+
+The rule is stored in the existing `recurrence` column as RFC 5545 text
+(`DTSTART;TZID=…` + `RRULE:…`) and expanded with `dateutil.rrule`, so a
+database built before this works unchanged.
 
 ### Late delivery is stated, not hidden
 
@@ -531,8 +600,6 @@ moment to add migrations — not before.
 
 - **A warning before LINE's monthly push quota runs out**, for anyone who
   still delivers on LINE.
-- **Recurring reminders.** The schema has a reserved `recurrence` column; v0
-  writes `NULL` and never reads it.
 
 **The one worth protecting**
 

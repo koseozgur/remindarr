@@ -20,6 +20,9 @@ dependencies = [
     "pydantic-settings==2.16.2",
     "structlog==26.1.0",
     "tzdata==2026.6",
+    # Recurring reminders: RFC 5545 RRULE expansion. Only dateutil.rrule is
+    # used -- never its fuzzy date parser, which is exactly what timeparse avoids.
+    "python-dateutil==2.9.0.post0",
 ]
 
 [project.scripts]
@@ -31,6 +34,7 @@ dev = [
     "pytest-asyncio==1.4.1.post1",
     "ruff==0.17.4",
     "mypy==2.4.1",
+    "types-python-dateutil==2.9.0.20261029",
 ]
 
 [build-system]

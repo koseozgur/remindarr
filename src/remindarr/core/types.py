@@ -119,3 +119,7 @@ class ParsedReminder:
     """The substring recognised as the time expression, for echoing back."""
 
     warnings: list[str] = field(default_factory=list)
+
+    recurrence: str | None = None
+    """For a repeat: the serialised series (see ``core.recurrence``), whose
+    first occurrence is ``due_at``. ``None`` for a one-off."""

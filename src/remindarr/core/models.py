@@ -105,7 +105,9 @@ class Reminder(Base):
     text: Mapped[str] = mapped_column(Text)
 
     due_at: Mapped[datetime] = mapped_column(UtcDateTime())
-    """When the user asked to be reminded. Immutable -- it records intent."""
+    """When the user asked to be reminded. Immutable per occurrence -- it records
+    intent. A recurring reminder moves it to the next occurrence once one is
+    delivered or given up on (see ``service.mark_sent``)."""
 
     next_attempt_at: Mapped[datetime] = mapped_column(UtcDateTime())
     """When the scheduler should next try. Moves on retry; ``due_at`` does not."""
@@ -137,6 +139,6 @@ class Reminder(Base):
     last_error: Mapped[str | None] = mapped_column(Text, default=None)
 
     recurrence: Mapped[str | None] = mapped_column(String(256), default=None)
-    """Reserved for RRULE strings. v0 writes NULL and never reads it."""
+    """NULL for a one-off; else a DTSTART+RRULE pair (``core.recurrence``)."""
 
     subscriber: Mapped[Subscriber] = relationship(back_populates="reminders")

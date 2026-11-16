@@ -10,11 +10,15 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Reminder, ReminderState, Subscriber
+from .recurrence import RecurrenceError, Series
 from .types import Route, Sender
+
+log = structlog.get_logger(__name__)
 
 
 async def get_or_create_subscriber(
@@ -51,6 +55,7 @@ async def create_reminder(
     route: Route,
     now: datetime,
     fallback: Route | None = None,
+    recurrence: str | None = None,
 ) -> Reminder:
     if fallback is not None and fallback.platform != route.platform:
         raise ValueError("a fallback route must be on the delivery platform")
@@ -64,6 +69,7 @@ async def create_reminder(
         delivery_address=route.address,
         fallback_address=fallback.address if fallback is not None else None,
         created_at=now,
+        recurrence=recurrence,
     )
     session.add(reminder)
     await session.flush()
@@ -121,11 +127,68 @@ async def claim_due(session: AsyncSession, *, now: datetime, limit: int) -> list
     return list((await session.execute(stmt)).scalars())
 
 
+def series_of(reminder: Reminder) -> Series | None:
+    """The reminder's series, or ``None`` for a one-off.
+
+    A stored rule that no longer parses (a hand-edited row) degrades to a
+    one-off -- this occurrence still goes out, and the row then ends -- rather
+    than wedging the scheduler on every tick.
+    """
+    if reminder.recurrence is None:
+        return None
+    try:
+        return Series.parse(reminder.recurrence)
+    except RecurrenceError as exc:
+        log.warning("recurrence.unreadable", reminder_id=reminder.id, error=str(exc))
+        return None
+
+
+def catch_up(reminder: Reminder, *, now: datetime) -> bool:
+    """Move a recurring reminder that missed occurrences onto the latest one.
+
+    After downtime spanning several occurrences, the user gets *one* delivery,
+    for the most recent missed occurrence (so "delivered late" says how late
+    that one is), never a burst of N. Only called before an occurrence's first
+    attempt: once an attempt has been made its ``due_at`` -- and so its
+    idempotency key -- must not move. Returns whether any were skipped.
+    """
+    series = series_of(reminder)
+    if series is None:
+        return False
+    latest = series.latest_at_or_before(now)
+    if latest is None or latest <= reminder.due_at:
+        return False
+    reminder.due_at = latest
+    return True
+
+
+def _advance(reminder: Reminder, *, now: datetime) -> bool:
+    """Schedule a recurring reminder's next occurrence; ``False`` for a one-off.
+
+    The same row carries the whole series: ``due_at`` moves to the next
+    occurrence strictly after both now and the current one, so an occurrence
+    whose retries ran past later occurrences does not trigger a burst. State is
+    left alone: a /cancel that landed during delivery stays cancelled.
+    """
+    series = series_of(reminder)
+    if series is None:
+        return False
+    nxt = series.next_after(max(now, reminder.due_at))
+    if nxt is None:
+        return False
+    reminder.due_at = nxt
+    reminder.next_attempt_at = nxt
+    reminder.attempts = 0
+    return True
+
+
 def mark_sent(reminder: Reminder, *, now: datetime) -> None:
-    reminder.state = ReminderState.SENT
     reminder.sent_at = now
-    reminder.attempts += 1
     reminder.last_error = None
+    if _advance(reminder, now=now):
+        return
+    reminder.state = ReminderState.SENT
+    reminder.attempts += 1
 
 
 def mark_retry(reminder: Reminder, *, now: datetime, backoff_base: float, error: str) -> None:
@@ -135,7 +198,14 @@ def mark_retry(reminder: Reminder, *, now: datetime, backoff_base: float, error:
     reminder.next_attempt_at = now + timedelta(seconds=delay)
 
 
-def mark_failed(reminder: Reminder, *, error: str) -> None:
+def mark_failed(reminder: Reminder, *, error: str, now: datetime) -> None:
+    """One occurrence is lost; a series carries on with its next one.
+
+    ``last_error`` is kept on the row (not cleared by the advance), so a
+    failing series is visible in the table until an occurrence succeeds.
+    """
+    reminder.last_error = error
+    if _advance(reminder, now=now):
+        return
     reminder.state = ReminderState.FAILED
     reminder.attempts += 1
-    reminder.last_error = error

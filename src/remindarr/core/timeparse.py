@@ -16,6 +16,13 @@ Supported, all resolved in the subscriber's local timezone:
     monday / on monday at 9am / next friday
     sep 3 / on 3 september at 10:00 / 2026-09-03 / 2026-09-03 14:00
 
+Repeats (see the README's "Recurring reminders" for the semantics):
+
+    every day at 9 / every 3 days / every other day / every morning
+    every weekday at 8:00 / every weekend / every mon and thu at 18:00
+    every 2 weeks on friday / every month on the 25th / every year on 3 sep
+    every hour / every 2 hours
+
 Bare 12-hour times without am/pm resolve to whichever reading comes soonest --
 "at 9" said at 15:00 means 21:00 today, said at 22:00 means 09:00 tomorrow. The
 confirmation message always echoes the resolved absolute time, so a wrong guess
@@ -30,6 +37,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from .recurrence import Series, clamped_month_days
 from .types import ParsedReminder
 
 
@@ -92,8 +100,17 @@ _MONTHS: dict[str, int] = {
     "december": 12, "dec": 12,
 }  # fmt: skip
 
+
 # A clock time: "9", "9am", "09:30", "18:00", "9.30pm"
-_CLOCK = r"(?P<hour>\d{1,2})(?:[:.](?P<minute>\d{2}))?\s*(?P<ampm>am|pm|a\.m\.|p\.m\.)?"
+def _clock_re(prefix: str = "") -> str:
+    """A clock-time regex; ``prefix`` renames its groups so two can share a pattern."""
+    return (
+        rf"(?P<{prefix}hour>\d{{1,2}})(?:[:.](?P<{prefix}minute>\d{{2}}))?"
+        rf"\s*(?P<{prefix}ampm>am|pm|a\.m\.|p\.m\.)?"
+    )
+
+
+_CLOCK = _clock_re()
 _AT = r"(?:at\s+|@\s*)"
 _DAYPART = r"(?P<daypart>morning|afternoon|evening|night|noon|midday|midnight)"
 
@@ -192,11 +209,11 @@ def _daypart_time(name: str) -> time:
     }[name]
 
 
-def _clock_from_match(m: re.Match[str]) -> tuple[time, bool]:
+def _clock_from_match(m: re.Match[str], prefix: str = "") -> tuple[time, bool]:
     """Return the clock time and whether the 12/24-hour reading was ambiguous."""
-    hour = int(m.group("hour"))
-    minute = int(m.group("minute") or 0)
-    ampm = (m.group("ampm") or "").replace(".", "").lower()
+    hour = int(m.group(f"{prefix}hour"))
+    minute = int(m.group(f"{prefix}minute") or 0)
+    ampm = (m.group(f"{prefix}ampm") or "").replace(".", "").lower()
 
     if minute > 59:
         raise TimeParseError(f"{minute} is not a valid minute")
@@ -404,11 +421,224 @@ def _build_patterns() -> list[tuple[str, object]]:
 _PATTERNS = _build_patterns()
 
 
+# ---------------------------------------------------------------------------
+# Repeats. Tried before the one-off patterns: otherwise "call mom every monday"
+# would match the one-off "monday" at the tail and leave "every" as task text.
+# ---------------------------------------------------------------------------
+
+
+class RepeatError(TimeParseError):
+    """A repeat was recognised as one, but is outside what the grammar supports."""
+
+
+REPEAT_EXAMPLES = (
+    "“every day at 9”, “every weekday at 8:00”, “every mon and thu at 18:00”, "
+    "“every 2 weeks on friday”, “every month on the 25th”, “every year on 3 sep” "
+    "or “every hour”"
+)
+
+_BYDAY = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+_DAY_SEP = r"(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*&\s*)"
+_WEEKDAY_LIST = rf"(?P<days>(?:{_WEEKDAY_ALT})(?:{_DAY_SEP}(?:{_WEEKDAY_ALT}))*)\b"
+_EVERY_N = r"(?:(?P<n>\d+|other)\s+)?"
+# "call mom at 7pm every day": a time *before* "every" is the series' time too.
+# Without this the tail match would take "every day" alone and leave "at 7pm"
+# as task text, on a series firing at the 09:00 default.
+_REPEAT_LEAD = rf"(?:{_AT}{_clock_re('l')}\s+)?"
+_REPEAT_TRAIL = rf"(?:\s+(?:{_AT})?(?:{_CLOCK}|{_DAYPART}))?"
+_ORD = r"(?:st|nd|rd|th)?"
+
+# "every <something time-like>" that no repeat pattern took. Refusing beats
+# silently setting a one-off: "water plants every 2 weeks" must not quietly
+# become nothing, and "call mom every monday at 9 until june" must not become a
+# one-off with "every monday at 9 until" as its text.
+_REPEAT_HINT = re.compile(
+    r"(?:^|\s)(?:every|each)\s+(?:\d|other\b|few\b|couple\b|"
+    rf"(?:day|weekday|weekend|week|fortnight|month|year|hour|hr|minute|min|second|sec|"
+    rf"morning|afternoon|evening|night|noon|midnight|{_WEEKDAY_ALT})s?\b)",
+    re.IGNORECASE,
+)
+# The same words beside a one-off time: "take pills daily at 8" is a repeat
+# the grammar does not speak, not a one-off reminder to "take pills daily".
+_REPEAT_WORD = r"(?:daily|nightly|weekly|fortnightly|monthly|yearly|annually|hourly)"
+_REPEAT_WORD_EDGE = re.compile(rf"^{_REPEAT_WORD}\b|\b{_REPEAT_WORD}$", re.IGNORECASE)
+
+
+def _cant_repeat(hint: str = "") -> RepeatError:
+    if hint:
+        return RepeatError(f"I can't repeat that yet -- {hint}")
+    return RepeatError(f"I can't repeat that yet -- try {REPEAT_EXAMPLES}")
+
+
+@dataclass(frozen=True, slots=True)
+class _Repeat:
+    freq: str
+    by: str = ""
+    """BY* rule parts other than the time of day."""
+    interval: int = 1
+    hourly: bool = False
+
+
+def _interval(m: re.Match[str]) -> int:
+    raw = (m.groupdict().get("n") or "1").lower()
+    n = 2 if raw == "other" else int(raw)
+    if n < 1:
+        raise _cant_repeat(f"every {n}? Try {REPEAT_EXAMPLES}")
+    return n
+
+
+def _byday(raw: str) -> str:
+    names = re.split(_DAY_SEP, raw.strip(), flags=re.IGNORECASE)
+    days = sorted({_WEEKDAYS[name.lower()] for name in names})
+    return "BYDAY=" + ",".join(_BYDAY[d] for d in days)
+
+
+def _build_repeat_patterns() -> list[tuple[str, object]]:
+    def h_days(m: re.Match[str]) -> _Repeat:
+        return _Repeat("DAILY", interval=_interval(m))
+
+    def h_daypart(m: re.Match[str]) -> _Repeat:
+        return _Repeat("DAILY")
+
+    def h_kind(m: re.Match[str]) -> _Repeat:
+        days = "MO,TU,WE,TH,FR" if m.group("kind").lower() == "weekday" else "SA,SU"
+        return _Repeat("WEEKLY", by=f"BYDAY={days}")
+
+    def h_weekdays(m: re.Match[str]) -> _Repeat:
+        return _Repeat("WEEKLY", by=_byday(m.group("days")))
+
+    def h_weeks(m: re.Match[str]) -> _Repeat:
+        if not m.group("days"):
+            raise _cant_repeat("which day? Try “every week on friday”")
+        return _Repeat("WEEKLY", by=_byday(m.group("days")), interval=_interval(m))
+
+    def h_months(m: re.Match[str]) -> _Repeat:
+        if not m.group("mday"):
+            raise _cant_repeat("which day of the month? Try “every month on the 25th”")
+        day = int(m.group("mday"))
+        if not 1 <= day <= 31:
+            raise TimeParseError(f"no month has a day {day}")
+        return _Repeat("MONTHLY", by=clamped_month_days(day), interval=_interval(m))
+
+    def h_years(m: re.Match[str]) -> _Repeat:
+        month_name = m.group("month") or m.group("month2")
+        if not month_name:
+            raise _cant_repeat("which date? Try “every year on 3 sep”")
+        month = _MONTHS[month_name.lower()]
+        day = int(m.group("day") or m.group("day2"))
+        # 2024 is a leap year, so 29 Feb counts as a real date here.
+        if not 1 <= day <= calendar.monthrange(2024, month)[1]:
+            raise TimeParseError(f"{month_name} {day} is not a real date")
+        by = "BYMONTHDAY=28,29;BYSETPOS=-1" if (month, day) == (2, 29) else f"BYMONTHDAY={day}"
+        return _Repeat("YEARLY", by=f"BYMONTH={month};{by}", interval=_interval(m))
+
+    def h_hours(m: re.Match[str]) -> _Repeat:
+        return _Repeat("HOURLY", interval=_interval(m), hourly=True)
+
+    def h_too_often(m: re.Match[str]) -> _Repeat:
+        raise _cant_repeat("I don't repeat more often than every hour")
+
+    every = rf"{_REPEAT_LEAD}every\s+"
+    trail = _REPEAT_TRAIL
+    on_date = (
+        rf"(?:(?P<month>{_MONTH_ALT})\.?\s+(?P<day>\d{{1,2}}){_ORD}"
+        rf"|(?P<day2>\d{{1,2}}){_ORD}\s+(?:of\s+)?(?P<month2>{_MONTH_ALT})\.?)"
+    )
+    return [
+        (rf"{every}{_EVERY_N}days?{_UNIT_END}{trail}", h_days),
+        (rf"{every}{_DAYPART}", h_daypart),
+        (rf"{every}(?P<kind>weekday|weekend)s?{_UNIT_END}{trail}", h_kind),
+        (rf"{every}{_WEEKDAY_LIST}{trail}", h_weekdays),
+        (rf"{every}{_EVERY_N}weeks?{_UNIT_END}(?:\s+on\s+{_WEEKDAY_LIST})?{trail}", h_weeks),
+        (
+            rf"{every}{_EVERY_N}months?{_UNIT_END}"
+            rf"(?:\s+on\s+(?:the\s+)?(?P<mday>\d{{1,2}}){_ORD})?{trail}",
+            h_months,
+        ),
+        (rf"{every}{_EVERY_N}years?{_UNIT_END}(?:\s+on\s+{on_date})?{trail}", h_years),
+        (rf"{every}(?:(?P<n>\d+)\s+)?(?:hours?|hrs?){_UNIT_END}", h_hours),
+        (rf"{every}(?:\d+\s+)?(?:minutes?|mins?|seconds?|secs?){_UNIT_END}", h_too_often),
+    ]
+
+
+_REPEAT_PATTERNS = _build_repeat_patterns()
+
+
+def _repeat_clock(m: re.Match[str]) -> tuple[time | None, bool]:
+    groups = m.groupdict()
+    lead = groups.get("lhour")
+    trail = groups.get("hour") or groups.get("daypart")
+    if lead and trail:
+        raise TimeParseError("that has two times in it -- give it one")
+    if lead:
+        return _clock_from_match(m, "l")
+    if groups.get("daypart"):
+        return _daypart_time(groups["daypart"].lower()), False
+    if groups.get("hour"):
+        return _clock_from_match(m)
+    return None, False
+
+
+def _resolve_repeat(
+    m: re.Match[str], rep: _Repeat, now_utc: datetime, tz: ZoneInfo
+) -> tuple[Series, list[str]]:
+    clock, ambiguous = _repeat_clock(m)
+    interval = f";INTERVAL={rep.interval}" if rep.interval > 1 else ""
+
+    if rep.hourly:
+        if clock is not None:
+            raise _cant_repeat("an hourly repeat starts from now, so it takes no time")
+        start = now_utc.astimezone(UTC).replace(tzinfo=None, second=0, microsecond=0)
+        start += timedelta(hours=rep.interval)
+        return Series(f"FREQ=HOURLY{interval}", start, ZoneInfo("UTC"), utc_timeline=True), []
+
+    # A repeat always names its days, so a bare "9" is read as written, the
+    # same as "tomorrow at 9" -- not "whichever is sooner", which would make a
+    # series' time depend on the moment it happened to be set.
+    at = clock or DEFAULT_TIME
+    by = ";".join(p for p in (rep.by, f"BYHOUR={at.hour};BYMINUTE={at.minute};BYSECOND=0") if p)
+
+    # The first occurrence is the soonest match of the rule *without* its
+    # interval: "every 2 weeks on friday" said on a Saturday starts the coming
+    # Friday, not the one after. It then anchors the interval's phase.
+    now_local = now_utc.astimezone(tz).replace(tzinfo=None, second=0, microsecond=0)
+    first = Series(f"FREQ={rep.freq};{by}", now_local, tz).next_local_after(now_utc)
+    if first is None:  # pragma: no cover -- every rule the grammar builds recurs
+        raise _cant_repeat()
+    series = Series(f"FREQ={rep.freq}{interval};{by}", first, tz)
+
+    warnings = []
+    if ambiguous:
+        warnings.append(f"read “{at.hour}” as {at:%H:%M} -- add am or pm to change it")
+    return series, warnings
+
+
+def _anchored(patterns: list[tuple[str, object]]) -> list[tuple[re.Pattern[str], object, object]]:
+    """Each pattern anchored at the tail, then each at the head.
+
+    Tail first: "call mom tomorrow at 9" is the most natural phrasing, and
+    matching the tail cannot swallow leading task text.
+    """
+    out: list[tuple[re.Pattern[str], object, object]] = []
+    for anchored, take_remainder in (
+        (r"(?:^|\s+){pattern}\s*$", _remainder_before),
+        (r"^{pattern}(?:\s+|$)", _remainder_after),
+    ):
+        for pattern, handler in patterns:
+            regex = re.compile(anchored.format(pattern=pattern), re.IGNORECASE)
+            out.append((regex, handler, take_remainder))
+    return out
+
+
+_NOT_A_REMINDER = "that is a time but not a reminder -- tell me what to remind you about"
+
+
 def parse(text: str, *, now_utc: datetime, tz: ZoneInfo) -> ParsedReminder:
     """Parse a capture message into a reminder.
 
     Raises :class:`TimeParseError` when no time expression is recognised, or
-    when one is recognised but resolves to the past.
+    when one is recognised but resolves to the past; :class:`RepeatError` when
+    the message asks for a repeat outside the supported set.
     """
     if now_utc.tzinfo is None:
         raise ValueError("now_utc must be timezone-aware")
@@ -418,32 +648,45 @@ def parse(text: str, *, now_utc: datetime, tz: ZoneInfo) -> ParsedReminder:
     if not body:
         raise TimeParseError("there is nothing here to remind you about")
 
-    # Tail first: "call mom tomorrow at 9" is the most natural phrasing, and
-    # matching the tail cannot swallow leading task text.
-    for anchored, take_remainder in (
-        (r"(?:^|\s+){pattern}\s*$", _remainder_before),
-        (r"^{pattern}(?:\s+|$)", _remainder_after),
-    ):
-        for pattern, handler in _PATTERNS:
-            regex = re.compile(anchored.format(pattern=pattern), re.IGNORECASE)
-            m = regex.search(body)
-            if m is None:
-                continue
-            resolution = handler(m, now_local)  # type: ignore[operator]
-            task = take_remainder(body, m)
-            if not task:
-                raise TimeParseError(
-                    "that is a time but not a reminder -- tell me what to remind you about"
-                )
-            due_utc = resolution.when.astimezone(UTC)
-            if due_utc <= now_utc:
-                raise TimeParseError(f"{resolution.when:%Y-%m-%d %H:%M} is in the past")
-            return ParsedReminder(
-                text=task,
-                due_at=due_utc,
-                matched_phrase=m.group(0).strip(),
-                warnings=list(resolution.warnings),
-            )
+    for regex, handler, take_remainder in _ANCHORED_REPEATS:
+        m = regex.search(body)
+        if m is None:
+            continue
+        repeat = handler(m)  # type: ignore[operator]
+        task = take_remainder(body, m)  # type: ignore[operator]
+        if not task:
+            raise TimeParseError(_NOT_A_REMINDER)
+        series, warnings = _resolve_repeat(m, repeat, now_utc, tz)
+        return ParsedReminder(
+            text=task,
+            due_at=series.first,
+            matched_phrase=m.group(0).strip(),
+            warnings=warnings,
+            recurrence=series.serialize(),
+        )
+
+    if _REPEAT_HINT.search(body) or _REPEAT_WORD_EDGE.search(body):
+        raise _cant_repeat()
+
+    for regex, handler, take_remainder in _ANCHORED_ONE_OFFS:
+        m = regex.search(body)
+        if m is None:
+            continue
+        resolution = handler(m, now_local)  # type: ignore[operator]
+        task = take_remainder(body, m)  # type: ignore[operator]
+        if not task:
+            raise TimeParseError(_NOT_A_REMINDER)
+        if _REPEAT_WORD_EDGE.search(task):
+            raise _cant_repeat()
+        due_utc = resolution.when.astimezone(UTC)
+        if due_utc <= now_utc:
+            raise TimeParseError(f"{resolution.when:%Y-%m-%d %H:%M} is in the past")
+        return ParsedReminder(
+            text=task,
+            due_at=due_utc,
+            matched_phrase=m.group(0).strip(),
+            warnings=list(resolution.warnings),
+        )
 
     raise TimeParseError("I could not find a time in that")
 
@@ -466,3 +709,7 @@ def _tidy(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     # "remind me to" may have sat after the time expression.
     return _strip_lead_ins(s)
+
+
+_ANCHORED_REPEATS = _anchored(_REPEAT_PATTERNS)
+_ANCHORED_ONE_OFFS = _anchored(_PATTERNS)
