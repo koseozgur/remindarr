@@ -331,3 +331,28 @@ class TestDiscordFallbackMentionsTheRecipient:
         assert text.count(f"<@{U2_DISCORD}>") == 1
         assert mentions.everyone is False and mentions.roles is False
         assert [u.id for u in mentions.users] == [int(U2_DISCORD)]
+
+
+class TestRepeatForSomeoneElse:
+    async def test_repeat_goes_to_the_recipient_each_time_and_keeps_going(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        s = settings()
+        clock = MutableClock()
+        r = router(s, session_factory, clock)
+        reply = await r.handle(line_dm("bins @kid every monday at 7pm"))
+        assert reply is not None and "every Mon at 19:00, next: Mon 24 Aug 19:00" in reply.text
+        adapter = FakeAdapter(platform="line")
+        registry = DeliveryRegistry()
+        registry.register(adapter)
+        scheduler = Scheduler(
+            settings=s, session_factory=session_factory, registry=registry, clock=clock
+        )
+        for week in range(2):
+            clock.now = NOW + timedelta(days=6 + 7 * week, hours=8, minutes=30)  # Mon 19:00 JST
+            assert await scheduler.tick() == 1
+        assert adapter.texts == ["⏰ bins (from oz)\n(repeats every Mon at 19:00)"] * 2
+        assert {m.route for m in adapter.sent} == {Route("line", f"user:{KID_LINE}")}
+        assert len({m.idempotency_key for m in adapter.sent}) == 2
+        [row] = await reminders(session_factory)
+        assert row.recipient == "kid" and row.state.value == "pending"

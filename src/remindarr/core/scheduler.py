@@ -97,6 +97,16 @@ class Scheduler:
             if reminder is None or reminder.state is not ReminderState.PENDING:
                 return  # cancelled between claim and delivery
 
+            if reminder.attempts == 0:
+                missed_from = reminder.due_at
+                if service.catch_up(reminder, now=now):
+                    log.info(
+                        "delivery.catch_up",
+                        reminder_id=reminder_id,
+                        missed_from=missed_from.isoformat(),
+                        delivering_for=reminder.due_at.isoformat(),
+                    )
+
             adapter = self.registry.get(reminder.delivery_platform)
             if adapter is None:
                 self._retry(
@@ -118,7 +128,7 @@ class Scheduler:
                 await adapter.send(message)
             except DeliveryError as exc:
                 if exc.permanent:
-                    service.mark_failed(reminder, error=str(exc))
+                    service.mark_failed(reminder, error=str(exc), now=now)
                     log.warning(
                         "delivery.permanent_failure", reminder_id=reminder_id, error=str(exc)
                     )
@@ -135,7 +145,7 @@ class Scheduler:
 
     def _retry(self, reminder: Reminder, now: datetime, error: str) -> None:
         if reminder.attempts + 1 >= self.settings.max_delivery_attempts:
-            service.mark_failed(reminder, error=error)
+            service.mark_failed(reminder, error=error, now=now)
             log.warning("delivery.gave_up", reminder_id=reminder.id, error=error)
             return
         service.mark_retry(
@@ -170,13 +180,19 @@ class Scheduler:
                     self.settings, setter.platform, setter.platform_user_id, setter.display_name
                 )
                 body += f" (from {by})"
+        series = service.series_of(reminder)
+        if series is not None:
+            body += f"\n(repeats {series.describe()})"
         if lateness.total_seconds() > grace:
             body += f"\n(this was due {format_delta(-lateness)} — delivered late)"
         return body
 
 
 def idempotency_key(reminder: Reminder) -> str:
-    """The same UUID for every delivery attempt of one reminder.
+    """The same UUID for every delivery attempt of one reminder occurrence.
+
+    A recurring reminder advances ``due_at`` to each next occurrence, so each
+    occurrence gets its own key, while retries within one occurrence share it.
 
     Derived from the row rather than generated per attempt, so a retry after a
     lost response carries the key of the attempt that may already have landed.

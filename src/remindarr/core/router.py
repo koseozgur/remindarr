@@ -23,7 +23,7 @@ from remindarr.config import Settings
 from . import delivery, service
 from .clock import utcnow
 from .db import session_scope
-from .humanize import format_when
+from .humanize import format_next, format_when
 from .models import ReminderState, Subscriber
 from .timeparse import TimeParseError, parse
 from .types import IncomingMessage, Reply, Route
@@ -37,6 +37,7 @@ I set reminders. Tell me what and when:
   remind me to check the burn-in in 45 minutes
   water the plants on saturday morning
   rent is due on 1 september
+  take the bins out every monday at 7pm
 
 Add @line, @discord or @telegram to have it delivered on that app instead.
 Add @name to remind someone else on the owner's list of people.
@@ -137,8 +138,14 @@ class Router:
             fallback=target.fallback,
             recipient=target.recipient,
             now=now,
+            recurrence=parsed.recurrence,
         )
-        when = format_when(parsed.due_at, tz, now_utc=now)
+        series = service.series_of(reminder)
+        if series is not None:
+            nxt = format_next(parsed.due_at, tz, now_utc=now)
+            when = f"{series.describe()}, next: {nxt}"
+        else:
+            when = format_when(parsed.due_at, tz, now_utc=now)
         lines = [f"Got it — “{parsed.text}” {when}.", f"id {reminder.id}"]
         where = delivery.disclosure(target, message.route, self.settings, message.sender)
         if where is not None:
@@ -165,7 +172,18 @@ class Router:
             # "#3", not "3.": Discord renders "3. text" as a markdown ordered
             # list (renumbered, with extra spacing). "#3" with no space after
             # it is plain text everywhere.
-            lines.append(f"  #{r.id} {r.text} — {format_when(r.due_at, tz, now_utc=now)}{where}")
+            series = service.series_of(r)
+            if series is None:
+                when = format_when(r.due_at, tz, now_utc=now)
+                lines.append(f"  #{r.id} {r.text} — {when}{where}")
+            else:
+                # Pattern and next occurrence in the same zone: the series'
+                # own, named when a later /tz has made it differ from yours.
+                zone, pattern = tz, series.describe()
+                if not series.utc_timeline and series.tz.key != tz.key:
+                    zone, pattern = series.tz, f"{pattern} {series.tz.key} time"
+                nxt = format_next(r.due_at, zone, now_utc=now)
+                lines.append(f"  #{r.id} 🔁 {r.text} — {pattern}, next {nxt}{where}")
         return Reply("\n".join(lines))
 
     async def _cancel(
@@ -182,6 +200,10 @@ class Router:
         if reminder.state is not ReminderState.PENDING:
             return Reply(f"Reminder {arg} is already {reminder.state}.")
         await service.cancel_reminder(session, reminder=reminder)
+        series = service.series_of(reminder)
+        if series is not None:
+            # /cancel stops the whole series: one row carries every occurrence.
+            return Reply(f"Cancelled “{reminder.text}” ({series.describe()}) — no more repeats.")
         return Reply(f"Cancelled “{reminder.text}”.")
 
     async def _timezone(

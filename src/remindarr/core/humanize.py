@@ -31,6 +31,17 @@ def format_when(due_utc: datetime, tz: ZoneInfo, *, now_utc: datetime) -> str:
     return f"{day_part} at {local:%H:%M} ({format_delta(due_utc - now_utc)})"
 
 
+def format_next(due_utc: datetime, tz: ZoneInfo, *, now_utc: datetime) -> str:
+    """A repeat's next occurrence: "Tue 18 Nov 08:00 (in 14 hours)".
+
+    Always the absolute date, unlike :func:`format_when`: next to a pattern
+    like "every weekday", "tomorrow" alone does not say which weekday.
+    """
+    local = due_utc.astimezone(tz)
+    year = "" if local.year == now_utc.astimezone(tz).year else f" {local.year}"
+    return f"{local:%a %-d %b}{year} {local:%H:%M} ({format_delta(due_utc - now_utc)})"
+
+
 def format_delta(delta: timedelta) -> str:
     """ "in 3 hours", "in 2 days", "12 minutes ago"."""
     seconds = int(delta.total_seconds())
