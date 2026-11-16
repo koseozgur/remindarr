@@ -258,3 +258,31 @@ class TestTimezones:
         assert parse("x tomorrow at 9", now_utc=NOW, tz=TZ).due_at == datetime(
             2026, 8, 19, 0, 0, tzinfo=UTC
         )  # 09:00 JST on the 19th
+
+
+class TestDanglingJoiners:
+    """A task that starts or ends on "and"/"or"/"&" means only part of the
+    time was read. Refuse rather than store the mangled text."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "pills twice a week, mon and thu at 8",
+            "and call mum tomorrow at 9",
+        ],
+    )
+    def test_refused(self, text: str) -> None:
+        with pytest.raises(TimeParseError, match="only read part"):
+            parse(text, now_utc=NOW, tz=TZ)
+
+    @pytest.mark.parametrize(
+        ("text", "task"),
+        [
+            ("buy rock and roll tickets tomorrow at 9", "buy rock and roll tickets"),
+            ("plan the Q&A tomorrow at 9", "plan the Q&A"),
+            ("call mum or dad tomorrow at 9", "call mum or dad"),
+            ("salt & pepper tomorrow", "salt & pepper"),
+        ],
+    )
+    def test_ordinary_joiners_are_kept(self, text: str, task: str) -> None:
+        assert parse(text, now_utc=NOW, tz=TZ).text == task

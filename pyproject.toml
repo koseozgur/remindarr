@@ -23,6 +23,7 @@ dependencies = [
     # Recurring reminders: RFC 5545 RRULE expansion. Only dateutil.rrule is
     # used -- never its fuzzy date parser, which is exactly what timeparse avoids.
     "python-dateutil==2.9.0.post0",
+    "anthropic==2.9.0",
 ]
 
 [project.scripts]

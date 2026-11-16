@@ -9,6 +9,7 @@ import signal
 import structlog
 
 from remindarr.adapters.base import CaptureAdapter, DeliveryAdapter, DeliveryRegistry
+from remindarr.ai.reading import Reader
 from remindarr.config import Settings
 from remindarr.core.clock import utcnow
 from remindarr.core.db import create_engine, create_session_factory, init_schema, session_scope
@@ -57,6 +58,21 @@ def build_adapters(settings: Settings) -> list[object]:
     return adapters
 
 
+def build_reader(settings: Settings) -> Reader | None:
+    """The optional AI reader, if a provider key is configured."""
+    if settings.anthropic_api_key is None:
+        return None
+    from remindarr.ai.claude import ClaudeReader
+
+    log.info("ai.enabled", provider="claude", model=settings.ai_model, effort=settings.ai_effort)
+    return ClaudeReader(
+        settings.anthropic_api_key.get_secret_value(),
+        model=settings.ai_model,
+        effort=settings.ai_effort,
+        timeout=settings.ai_timeout_seconds,
+    )
+
+
 def warn_if_nobody_allowed(result: BootstrapResult) -> None:
     """Deny-by-default would otherwise make a fresh install look broken."""
     if result.users == 0:
@@ -91,7 +107,9 @@ async def run(settings: Settings) -> None:
         result = await bootstrap(session, settings, now=utcnow())
     warn_if_nobody_allowed(result)
 
-    router = Router(settings=settings, session_factory=session_factory)
+    router = Router(
+        settings=settings, session_factory=session_factory, reader=build_reader(settings)
+    )
     router._bootstrapped = True
 
     # The protocols are runtime-checkable, so an adapter declares which halves

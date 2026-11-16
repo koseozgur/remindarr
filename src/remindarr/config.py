@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import zoneinfo
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -139,6 +139,15 @@ class Settings(BaseSettings):
     an identity listed here that belongs to nobody yet becomes a new admin
     user -- which is how a fresh install gets its first user. It only ever
     grants admin; taking it away is ``/remove``."""
+
+    anthropic_api_key: SecretStr | None = None
+    """Turns on the optional AI reader (Claude) for messages the grammar can't
+    parse. Unset means no AI at all: the bot works exactly as without it."""
+    ai_model: str = "claude-opus-5-5"
+    ai_effort: Literal["low", "medium", "high"] = "low"
+    """Low by default: reading one message is easy, and on LINE the reply has
+    to go out within about a minute."""
+    ai_timeout_seconds: Annotated[float, Field(gt=0, le=50)] = 20.0
 
     log_level: str = "INFO"
     log_json: bool = False
@@ -278,6 +287,7 @@ class Settings(BaseSettings):
         "discord_token",
         "line_channel_secret",
         "line_channel_access_token",
+        "anthropic_api_key",
         mode="before",
     )
     @classmethod
