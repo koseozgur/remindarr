@@ -268,12 +268,16 @@ Verified live by the owner the same day.
 
 **Roadmap (set 2026-11-17, ordered for family daily use):**
 1. ~~Recurring reminders.~~ Done, live 2026-11-17.
-2. **AI parser plugin.** Optional and provider-agnostic: **Claude by default
-   (`claude-opus-5-5`)**, Gemini as an alternative. Japanese input is the
-   headline. Needs the owner's Claude Console API key on the VM (spend limit
-   set; the Max plan includes $100/month of API credit, but how it links to the
-   Console still needs checking). The grammar runs first. The parsed
-   reminder text goes to the provider, which the owner accepts.
+2. ~~AI parser plugin.~~ **Live 2026-11-17**, verified by the owner. Claude
+   (`claude-opus-5-5`, low effort) reads only what the grammar can't; Japanese
+   works, and its output is checked and built through `build_series`. Measured
+   on the VM: 2.5–5 s per reading, about 1.4k tokens in and 100 out, so under
+   one US cent each. **The API key expires 2026-12-17** (30-day key); when it
+   does, AI reading silently falls back to the grammar, with only an `ai.bad_key`
+   log line. Rotate it before then, or move to workload identity federation
+   (the GCP VM authenticating as itself, with no stored key). Still open:
+   whether the Max plan's $100/month API credit applies to this key, a Gemini
+   reader, and Japanese *replies* (the bot's own text is English).
 3. **Reliability, before family depends on it:** automated DB backups, and
    an alert if the bot goes down.
 4. **Family onboarding:** the mechanism is done (`/invite`). What's left is
