@@ -614,34 +614,55 @@ def _resolve_repeat(
     m: re.Match[str], rep: _Repeat, now_utc: datetime, tz: ZoneInfo
 ) -> tuple[Series, list[str]]:
     clock, ambiguous = _repeat_clock(m)
-    interval = f";INTERVAL={rep.interval}" if rep.interval > 1 else ""
+    if rep.hourly and clock is not None:
+        raise _cant_repeat("an hourly repeat starts from now, so it takes no time")
+    series = build_series(
+        freq=rep.freq, by=rep.by, interval=rep.interval, at=clock, now_utc=now_utc, tz=tz
+    )
+    warnings = []
+    if ambiguous and clock is not None:
+        warnings.append(f"read “{clock.hour}” as {clock:%H:%M} -- add am or pm to change it")
+    return series, warnings
 
-    if rep.hourly:
-        if clock is not None:
-            raise _cant_repeat("an hourly repeat starts from now, so it takes no time")
+
+def build_series(
+    *,
+    freq: str,
+    by: str = "",
+    interval: int = 1,
+    at: time | None = None,
+    now_utc: datetime,
+    tz: ZoneInfo,
+) -> Series:
+    """The series stored for a repeat rule, first occurrence included.
+
+    Public so that anything else that understands a repeat -- the optional AI
+    parser -- stores exactly what the grammar would for the same rule.
+    ``by`` holds BY* parts other than the time of day; ``at`` is the local
+    time of day (``DEFAULT_TIME`` when omitted). ``HOURLY`` ignores ``at``.
+    """
+    interval_part = f";INTERVAL={interval}" if interval > 1 else ""
+
+    if freq == "HOURLY":
         start = now_utc.astimezone(UTC).replace(tzinfo=None, second=0, microsecond=0)
-        start += timedelta(hours=rep.interval)
-        return Series(f"FREQ=HOURLY{interval}", start, ZoneInfo("UTC"), utc_timeline=True), []
+        start += timedelta(hours=interval)
+        return Series(f"FREQ=HOURLY{interval_part}", start, ZoneInfo("UTC"), utc_timeline=True)
 
     # A repeat always names its days, so a bare "9" is read as written, the
     # same as "tomorrow at 9" -- not "whichever is sooner", which would make a
     # series' time depend on the moment it happened to be set.
-    at = clock or DEFAULT_TIME
-    by = ";".join(p for p in (rep.by, f"BYHOUR={at.hour};BYMINUTE={at.minute};BYSECOND=0") if p)
+    at = at or DEFAULT_TIME
+    parts = (by, f"BYHOUR={at.hour};BYMINUTE={at.minute};BYSECOND=0")
+    rule_by = ";".join(p for p in parts if p)
 
     # The first occurrence is the soonest match of the rule *without* its
     # interval: "every 2 weeks on friday" said on a Saturday starts the coming
     # Friday, not the one after. It then anchors the interval's phase.
     now_local = now_utc.astimezone(tz).replace(tzinfo=None, second=0, microsecond=0)
-    first = Series(f"FREQ={rep.freq};{by}", now_local, tz).next_local_after(now_utc)
-    if first is None:  # pragma: no cover -- every rule the grammar builds recurs
+    first = Series(f"FREQ={freq};{rule_by}", now_local, tz).next_local_after(now_utc)
+    if first is None:  # pragma: no cover -- every rule built here recurs
         raise _cant_repeat()
-    series = Series(f"FREQ={rep.freq}{interval};{by}", first, tz)
-
-    warnings = []
-    if ambiguous:
-        warnings.append(f"read “{at.hour}” as {at:%H:%M} -- add am or pm to change it")
-    return series, warnings
+    return Series(f"FREQ={freq}{interval_part};{rule_by}", first, tz)
 
 
 def _anchored(patterns: list[tuple[str, object]]) -> list[tuple[re.Pattern[str], object, object]]:
@@ -700,6 +721,7 @@ def parse(text: str, *, now_utc: datetime, tz: ZoneInfo) -> ParsedReminder:
                 f"I don't understand “{leftover.group(0).strip()}” in a repeat. "
                 f"Put one time right after the repeat, like “every monday at 7pm bins out”"
             )
+        _check_dangling(task)
         series, warnings = _resolve_repeat(m, repeat, now_utc, tz)
         return ParsedReminder(
             text=task,
@@ -727,6 +749,7 @@ def parse(text: str, *, now_utc: datetime, tz: ZoneInfo) -> ParsedReminder:
             raise TimeParseError(
                 f"that has more than one time in it (“{leftover.group(0).strip()}”) -- give it one"
             )
+        _check_dangling(task)
         due_utc = resolution.when.astimezone(UTC)
         if due_utc <= now_utc:
             raise TimeParseError(f"{resolution.when:%Y-%m-%d %H:%M} is in the past")
@@ -750,6 +773,19 @@ def _remainder_after(body: str, m: re.Match[str]) -> str:
         r"^\s*(?:to|that\s+i|i\s+should|please)\b", "", rest, count=1, flags=re.IGNORECASE
     )
     return _tidy(rest)
+
+
+_DANGLING = re.compile(r"(?:^|\s)(?:and|or|&|\+)$|^(?:and|or|&|\+)(?:\s|$)", re.IGNORECASE)
+"""A task that starts or ends on a joining word: the time expression was only
+part of what was asked ("pills twice a week, mon and | thu at 8")."""
+
+
+def _check_dangling(task: str) -> None:
+    if _DANGLING.search(task):
+        raise TimeParseError(
+            "I could only read part of the time in that -- give it one time, like "
+            "“call mom tomorrow at 9”"
+        )
 
 
 def _tidy(s: str) -> str:

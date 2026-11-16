@@ -19,6 +19,7 @@ import structlog
 from sqlalchemy import delete, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from remindarr.ai.reading import AiUnavailable, Reader, to_reminder
 from remindarr.config import PLATFORM_NAMES, Settings, valid_person_name
 
 from . import access, delivery, service
@@ -29,7 +30,7 @@ from .directory import load as load_directory
 from .humanize import format_next, format_when
 from .models import AccessCode, CodeKind, Reminder, ReminderState, Subscriber, User
 from .timeparse import TimeParseError, parse
-from .types import USER_PREFIX, IncomingMessage, Reply, Route
+from .types import USER_PREFIX, IncomingMessage, ParsedReminder, Reply, Route
 
 log = structlog.get_logger(__name__)
 
@@ -76,6 +77,8 @@ class Router:
     clock: Callable[[], datetime] = utcnow
     """Injected so tests can pin "now" without patching the module."""
     limiter: access.AttemptLimiter = field(default_factory=access.AttemptLimiter)
+    reader: Reader | None = None
+    """Optional AI reader, asked only when the grammar can't parse a message."""
     _bootstrapped: bool = field(default=False, init=False)
 
     async def handle(self, message: IncomingMessage) -> Reply | None:
@@ -169,7 +172,10 @@ class Router:
         try:
             parsed = parse(target.text, now_utc=now, tz=tz)
         except TimeParseError as exc:
-            return Reply(f"{exc}.\n\nTry something like “call mom tomorrow at 9”, or /help.")
+            ai_parsed = await self._ask_ai(target.text, now, tz)
+            if ai_parsed is None:
+                return Reply(f"{exc}.\n\nTry something like “call mom tomorrow at 9”, or /help.")
+            parsed = ai_parsed
 
         reminder = await service.create_reminder(
             session,
@@ -194,6 +200,24 @@ class Router:
             lines.append(where)
         lines.extend(f"note: {w}" for w in parsed.warnings)
         return Reply("\n".join(lines))
+
+    async def _ask_ai(self, text: str, now: datetime, tz: ZoneInfo) -> ParsedReminder | None:
+        """The AI's reading, or None to fall back on the grammar's refusal.
+
+        Grammar first, always: it's instant, free and predictable. The AI only
+        sees what the grammar gave up on, and its answer must pass the same
+        checks a grammar result would (future, real date, supported repeat).
+        """
+        if self.reader is None:
+            return None
+        try:
+            reading = await self.reader.read(text, now_local=now.astimezone(tz))
+            return to_reminder(reading, now_utc=now, tz=tz)
+        except AiUnavailable as exc:
+            log.info("ai.unavailable", reason=str(exc))
+        except TimeParseError as exc:
+            log.info("ai.unreadable", reason=str(exc))
+        return None
 
     async def _list(
         self,

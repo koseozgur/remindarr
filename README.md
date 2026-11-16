@@ -11,7 +11,7 @@
   <img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white">
   <img alt="Typed: mypy strict" src="https://img.shields.io/badge/mypy-strict-2A6DB2">
   <a href="https://github.com/astral-sh/ruff"><img alt="Ruff" src="https://img.shields.io/badge/lint-ruff-D7FF64"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-462-3fb950">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-506-3fb950">
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
@@ -565,6 +565,41 @@ The rule is stored in the existing `recurrence` column as RFC 5545 text
 (`DTSTART;TZID=…` + `RRULE:…`) and expanded with `dateutil.rrule`, so a
 database built before this works unchanged.
 
+### Optional: AI reading, including Japanese
+
+The grammar above is deliberately narrow. With an Anthropic API key set, a
+message the grammar can't parse gets a second reading from Claude, and that
+includes anything in Japanese:
+
+```
+明日の午後3時に母に電話する
+Got it — “母に電話する” tomorrow at 15:00 (in 28 hours).
+id 14
+note: I read this one with AI -- check the time above
+```
+
+How it stays trustworthy:
+
+- **Grammar first, always.** It's instant, free and predictable. The AI only
+  sees messages the grammar gave up on, and never commands.
+- **The model doesn't decide anything.** It returns a structured reading (the
+  task, a date and time, an optional repeat), and code checks it: a real date,
+  in the future, a repeat the scheduler supports. Repeats are built by the
+  grammar's own code, so a series the AI understood is stored exactly as one
+  the grammar did. Anything off is refused, not repaired.
+- **It says when it was used.** Every AI-read confirmation carries the note
+  above, next to the exact resolved time.
+- **It fails safe.** No key, a timeout, an outage or a refusal all mean you
+  get the grammar's usual "I could not find a time" reply. The AI never
+  blocks a reminder the grammar could have set.
+- **What it sends:** only the text of a message the grammar couldn't parse,
+  plus your current local time, to Anthropic's API. That is the one part of
+  remindarr that leaves your server.
+
+Set `REMINDARR_ANTHROPIC_API_KEY` to turn it on, and set a monthly spend limit
+in the Claude Console while you're there. Each reading is one short request,
+and it only happens for messages the grammar can't handle.
+
 ### Late delivery is stated, not hidden
 
 If the process was down when a reminder came due, it fires on the next tick and
@@ -596,6 +631,10 @@ All via environment or `.env`, prefix `REMINDARR_`:
 | `REMINDARR_MAX_DELIVERY_ATTEMPTS` | `5` | before giving up |
 | `REMINDARR_RETRY_BACKOFF_SECONDS` | `30` | base for exponential backoff |
 | `REMINDARR_LATE_DELIVERY_GRACE_MINUTES` | `60` | lateness before saying so |
+| `REMINDARR_ANTHROPIC_API_KEY` | — (no AI) | turns on [AI reading](#optional-ai-reading-including-japanese) with Claude |
+| `REMINDARR_AI_MODEL` | `claude-opus-5-5` | the model used for AI reading |
+| `REMINDARR_AI_EFFORT` | `low` | `low`, `medium` or `high` |
+| `REMINDARR_AI_TIMEOUT_SECONDS` | `20` | give up and fall back to the grammar's reply |
 | `REMINDARR_LOG_LEVEL` | `INFO` | |
 | `REMINDARR_LOG_JSON` | `false` | JSON logs for shipping |
 
