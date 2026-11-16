@@ -99,6 +99,9 @@ async def transcript() -> list[tuple[str, str]]:
 
     clock = Clock(START)
     settings = Settings(
+        # Never read the developer's real .env: it holds live tokens and the
+        # owner's people, which have no business in a generated image.
+        _env_file=None,
         database_url="sqlite+aiosqlite://",
         default_timezone="Asia/Tokyo",
         allowed_users=frozenset({"telegram:demo"}),

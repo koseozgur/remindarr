@@ -1,6 +1,7 @@
 # Users, pairing and the app API
 
-Status: **proposed** (2026-11-17), not yet built. This is the server-side
+Status: **phase 1 built** (2026-11-17): users, invites, linking, admin commands.
+Phase 2 (pairing and the app API) is not built yet. This is the server-side
 foundation for the iPhone app, and it also makes family onboarding possible
 without anyone editing the VM.
 
@@ -114,10 +115,11 @@ route, `/api/*`, and everything else stays 404.
 
 ## Phasing
 
-1. **Users in the database:** the tables, bootstrap and import, `/invite`
-   `/join` `/link` `/users` `/remove`, and the allow check moving to "linked
-   to a user". `@person` resolves against users. Behaviour for today's VM
-   is unchanged after the one-time import.
+1. **Users in the database** (built): the tables, bootstrap and import,
+   `/invite` `/join` `/link` `/users` `/remove` `/deliver`, and the allow
+   check moving to "linked to a user". `@person` resolves against users.
+   Behaviour for today's VM is unchanged after the one-time import, except
+   that the schema change needs a fresh database (see the PR).
 2. **Pairing and the API:** devices, `/pair` `/devices` `/unpair`, the v1
    endpoints, and the Caddy route.
 
@@ -127,5 +129,7 @@ route, `/api/*`, and everything else stays 404.
   reminders, and delivery stays on LINE/Discord. Local notifications on the
   phone would duplicate those, unless "app" becomes a delivery choice
   (`deliver_on: app`). To decide when the app exists.
-- **Timezone moves to the user.** It's per identity today. Linked identities
-  should share one; the user's timezone wins, and `/tz` sets it.
+- **Timezone lives on each identity, kept in step.** Phase 1 left the column
+  where it was (the recurring-reminders work reads it). `/tz` and `/link` keep
+  all of one user's identities on the same zone. Moving it onto `users` is a
+  later tidy-up, not a behaviour change.

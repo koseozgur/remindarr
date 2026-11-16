@@ -22,7 +22,16 @@ KNOWN_PLATFORMS = frozenset({"telegram", "discord", "line"})
 PLATFORM_NAMES = {"telegram": "Telegram", "discord": "Discord", "line": "LINE"}
 """How a platform is spelled to humans, in replies."""
 
-_PERSON_NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
+_PERSON_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
+
+
+def valid_person_name(name: str) -> bool:
+    """Lowercase letters, digits, ``-`` and ``_``, and not an app's name.
+
+    App names are reserved so ``@line`` can only ever mean the app and
+    ``@name`` can only ever mean a person.
+    """
+    return bool(_PERSON_NAME.fullmatch(name)) and name not in KNOWN_PLATFORMS
 
 
 def parse_identity(entry: str, *, field: str) -> str:
@@ -62,6 +71,10 @@ class Person:
     deliver_on: str | None = None
     """Platform that reminders set in a one-to-one chat are delivered on.
     ``None`` means "wherever it was set"."""
+
+    auto_named: bool = False
+    """No name was given (imported from a bare allow-list entry): credited by
+    chat display name, and not reachable with ``@name``."""
 
     def user_id_on(self, platform: str) -> str | None:
         for identity in self.identities:
@@ -110,14 +123,22 @@ class Settings(BaseSettings):
     is on time."""
 
     allowed_users: Annotated[frozenset[str], NoDecode] = frozenset()
-    """Who may use the bot, as ``platform:user_id`` entries. Empty means nobody:
-    deny by default, because on LINE every stranger's reminder spends the
-    owner's push quota. ``NoDecode`` because pydantic-settings would otherwise
-    parse the env value as JSON rather than a comma-separated list."""
+    """**Seed only.** ``platform:user_id`` entries imported as users the first
+    time the database has none; after that, ``/invite`` and ``/remove`` manage
+    who's in, and editing this changes nothing. ``NoDecode`` because
+    pydantic-settings would otherwise parse the env value as JSON rather than a
+    comma-separated list."""
 
     people: Annotated[tuple[Person, ...], NoDecode] = ()
-    """Which identities are one person, and where they want reminders. See
-    :meth:`_parse_people` for the syntax."""
+    """**Seed only**, like ``allowed_users``: which identities are one person,
+    and where they want reminders. See :meth:`_parse_people` for the syntax."""
+
+    admins: Annotated[frozenset[str], NoDecode] = frozenset()
+    """Who may ``/invite`` and ``/remove``: person names and/or
+    ``platform:user_id`` entries, comma-separated. Applied at every start, and
+    an identity listed here that belongs to nobody yet becomes a new admin
+    user -- which is how a fresh install gets its first user. It only ever
+    grants admin; taking it away is ``/remove``."""
 
     log_level: str = "INFO"
     log_json: bool = False
@@ -151,6 +172,33 @@ class Settings(BaseSettings):
         return frozenset(
             parse_identity(str(item), field="allowed_users") for item in raw if str(item).strip()
         )
+
+    @field_validator("admins", mode="before")
+    @classmethod
+    def _parse_admins(cls, v: object) -> object:
+        """``owner, discord:5678`` -> ``{"owner", "discord:5678"}``."""
+        if v is None:
+            return frozenset()
+        if isinstance(v, str):
+            raw = v.split(",")
+        elif isinstance(v, (list, tuple, set, frozenset)):
+            raw = list(v)
+        else:
+            return v
+        entries: set[str] = set()
+        for item in raw:
+            entry = str(item).strip()
+            if not entry:
+                continue
+            if ":" in entry:
+                entries.add(parse_identity(entry, field="admins"))
+            elif valid_person_name(entry.lower()):
+                entries.add(entry.lower())
+            else:
+                raise ValueError(
+                    f"admins entry {entry!r} is neither a person name nor platform:user_id"
+                )
+        return frozenset(entries)
 
     @field_validator("people", mode="before")
     @classmethod
