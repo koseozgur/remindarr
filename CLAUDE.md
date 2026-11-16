@@ -178,6 +178,17 @@ never had a real round trip.
   notifications. The $99/yr Developer Program only buys remote push and
   TestFlight for family; defer it until those are actually wanted. LINE is
   the family-reaching surface; the app complements it rather than replacing it.
+  **Deferred by the owner (2026-11-17), idea endorsed.** One app, three
+  features: (1) locally scheduled notifications independent of Discord,
+  (2) syncing into Apple Reminders via EventKit, on-device with the user's
+  permission (there is no server-side Reminders API, and unofficial iCloud
+  access is out), (3) location triggers. Shared prerequisites: full Xcode (not
+  installed; the dev Mac has only the Command Line Tools) and a new
+  authenticated, per-user sync API on the VM (Caddy proxies only
+  `/line/webhook` today, so this would be a second public endpoint). If a
+  cleaner phone notification is wanted before then, a delivery-only ntfy or
+  Pushover adapter needs no app. Both are unverified: ntfy's self-hosted iOS
+  push may relay via ntfy.sh, and Pushover is a one-time purchase.
 
 **Access control done (2026-11-08):** `REMINDARR_ALLOWED_USERS`
 (`platform:user_id`, comma-separated), deny by default, enforced in the core
