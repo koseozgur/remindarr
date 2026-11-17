@@ -278,8 +278,13 @@ Verified live by the owner the same day.
    (the GCP VM authenticating as itself, with no stored key). Still open:
    whether the Max plan's $100/month API credit applies to this key, a Gemini
    reader, and Japanese *replies* (the bot's own text is English).
-3. **Reliability, before family depends on it:** automated DB backups, and
-   an alert if the bot goes down.
+3. **Reliability, before family depends on it.** Backups live 2026-11-17:
+   the app takes a verified daily SQLite copy (keeps 14 on the VM), and an
+   hourly host timer uploads new ones to a free-tier GCS bucket (30-day
+   lifecycle) as a create-only service account. `/healthz` is live through
+   Caddy. **Still open: the uptime check plus email alert** (waiting on which
+   address). Lesson: a VM stop/start changes the ephemeral IP, and with it the
+   sslip.io hostname and the LINE webhook URL; it happened once already.
 4. **Family onboarding:** the mechanism is done (`/invite`). What's left is
    inviting real family, a live test of `@person`, a real name, and the bot's
    display names on LINE and Discord.
