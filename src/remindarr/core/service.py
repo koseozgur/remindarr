@@ -78,11 +78,19 @@ async def create_reminder(
     return reminder
 
 
-async def list_pending(session: AsyncSession, *, subscriber_id: int) -> list[Reminder]:
+async def identity_ids(session: AsyncSession, subscriber: Subscriber) -> list[int]:
+    """Every subscriber id of the same person: what they set on any linked app."""
+    if subscriber.user_id is None:
+        return [subscriber.id]
+    stmt = select(Subscriber.id).where(Subscriber.user_id == subscriber.user_id)
+    return sorted(set((await session.execute(stmt)).scalars()) | {subscriber.id})
+
+
+async def list_pending(session: AsyncSession, *, subscriber_ids: list[int]) -> list[Reminder]:
     stmt = (
         select(Reminder)
         .where(
-            Reminder.subscriber_id == subscriber_id,
+            Reminder.subscriber_id.in_(subscriber_ids),
             Reminder.state == ReminderState.PENDING,
         )
         .order_by(Reminder.due_at)
@@ -91,13 +99,13 @@ async def list_pending(session: AsyncSession, *, subscriber_id: int) -> list[Rem
 
 
 async def get_reminder(
-    session: AsyncSession, *, subscriber_id: int, reminder_id: int
+    session: AsyncSession, *, subscriber_ids: list[int], reminder_id: int
 ) -> Reminder | None:
-    """Scoped to the subscriber on purpose -- an id from another person's list
-    must not be addressable."""
+    """Scoped to the person's own identities on purpose -- an id from another
+    person's list must not be addressable."""
     stmt = select(Reminder).where(
         Reminder.id == reminder_id,
-        Reminder.subscriber_id == subscriber_id,
+        Reminder.subscriber_id.in_(subscriber_ids),
     )
     return (await session.execute(stmt)).scalar_one_or_none()
 

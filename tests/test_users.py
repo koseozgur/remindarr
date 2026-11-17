@@ -352,3 +352,34 @@ class TestPeople:
         )
         reply = await say(r, "ping @line-ustray tomorrow at 9")
         assert "It'll go to" not in reply
+
+
+class TestListAcrossApps:
+    async def test_list_shows_what_was_set_on_every_linked_app(self, router: Router) -> None:
+        await say(router, "call the bank tomorrow at 9")  # on LINE
+        await say(router, "water plants tomorrow at 10", platform="discord", user_id=OWNER_DISCORD)
+        on_line = await say(router, "/list")
+        assert "call the bank" in on_line
+        assert "water plants" in on_line
+        assert "(set on Discord)" in on_line
+        assert "(set on LINE)" not in on_line
+        on_discord = await say(router, "/list", platform="discord", user_id=OWNER_DISCORD)
+        assert "(set on LINE)" in on_discord
+
+    async def test_cancel_works_from_any_linked_app(self, router: Router) -> None:
+        reply = await say(router, "call the bank tomorrow at 9")
+        rid = re.search(r"id (\d+)", reply)
+        assert rid
+        cancelled = await say(
+            router, f"/cancel {rid.group(1)}", platform="discord", user_id=OWNER_DISCORD
+        )
+        assert "Cancelled" in cancelled
+
+    async def test_another_persons_reminders_stay_out_of_reach(self, router: Router) -> None:
+        mum = code_in(await say(router, "/invite mum"), "join")
+        await say(router, f"/join {mum}", user_id="Umum")
+        reply = await say(router, "call the bank tomorrow at 9")
+        rid = re.search(r"id (\d+)", reply)
+        assert rid
+        assert "Nothing pending" in await say(router, "/list", user_id="Umum")
+        assert "No reminder" in await say(router, f"/cancel {rid.group(1)}", user_id="Umum")

@@ -124,9 +124,11 @@ class Router:
                 case "start" | "help" | "h":
                     return Reply(HELP + (ADMIN_HELP if is_admin else ""))
                 case "list" | "ls":
-                    return await self._list(session, subscriber.id, message.route, tz, now)
+                    mine = await service.identity_ids(session, subscriber)
+                    return await self._list(session, mine, subscriber.id, message.route, tz, now)
                 case "cancel" | "rm" | "del":
-                    return await self._cancel(session, subscriber.id, rest, tz, now)
+                    mine = await service.identity_ids(session, subscriber)
+                    return await self._cancel(session, mine, rest, tz, now)
                 case "tz" | "timezone":
                     return await self._timezone(session, subscriber, rest, now)
                 case "remind" | "r":
@@ -222,12 +224,16 @@ class Router:
     async def _list(
         self,
         session: AsyncSession,
-        subscriber_id: int,
+        subscriber_ids: list[int],
+        here_subscriber: int,
         here: Route,
         tz: ZoneInfo,
         now: datetime,
     ) -> Reply:
-        pending = await service.list_pending(session, subscriber_id=subscriber_id)
+        """Everything the person set, on any app they've linked; rows set on
+        another app say where."""
+        pending = await service.list_pending(session, subscriber_ids=subscriber_ids)
+        set_on = await _platforms_of(session, subscriber_ids)
         if not pending:
             return Reply("Nothing pending.")
         lines = ["Pending:"]
@@ -235,6 +241,9 @@ class Router:
             where = delivery.label(
                 Route(r.delivery_platform, r.delivery_address), here, r.recipient
             )
+            if r.subscriber_id != here_subscriber:
+                app = set_on.get(r.subscriber_id, "")
+                where += f" (set on {PLATFORM_NAMES.get(app, app)})"
             # "#3", not "3.": Discord renders "3. text" as a markdown ordered
             # list (renumbered, with extra spacing). "#3" with no space after
             # it is plain text everywhere.
@@ -253,13 +262,18 @@ class Router:
         return Reply("\n".join(lines))
 
     async def _cancel(
-        self, session: AsyncSession, subscriber_id: int, arg: str, tz: ZoneInfo, now: datetime
+        self,
+        session: AsyncSession,
+        subscriber_ids: list[int],
+        arg: str,
+        tz: ZoneInfo,
+        now: datetime,
     ) -> Reply:
         arg = arg.removeprefix("#")  # /list shows "#3", so "/cancel #3" must work
         if not arg.isdigit():
             return Reply("Which one? Use /cancel <id> — /list shows the ids.")
         reminder = await service.get_reminder(
-            session, subscriber_id=subscriber_id, reminder_id=int(arg)
+            session, subscriber_ids=subscriber_ids, reminder_id=int(arg)
         )
         if reminder is None:
             return Reply(f"No reminder with id {arg}.")
@@ -524,6 +538,13 @@ class Router:
         await session.delete(user)
         log.info("access.removed", user=name, cancelled=len(pending))
         return Reply(f"Removed {name}. Cancelled {len(pending)} pending reminder(s).")
+
+
+async def _platforms_of(session: AsyncSession, subscriber_ids: list[int]) -> dict[int, str]:
+    rows = await session.execute(
+        select(Subscriber.id, Subscriber.platform).where(Subscriber.id.in_(subscriber_ids))
+    )
+    return {sid: platform for sid, platform in rows}
 
 
 def _split_command(text: str) -> tuple[str | None, str]:
