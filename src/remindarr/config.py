@@ -151,6 +151,20 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     """Turns on the optional AI reader (Claude) for messages the grammar can't
     parse. Unset means no AI at all: the bot works exactly as without it."""
+    anthropic_federation_rule_id: str | None = None
+    """Keyless alternative to ``anthropic_api_key``: workload identity
+    federation, where a GCE VM swaps its own Google identity token for a
+    short-lived Anthropic one. Needs ``anthropic_organization_id`` too, and a
+    federation rule set up in the Claude Console (docs/deploy-gcp.md)."""
+    anthropic_organization_id: str | None = None
+    anthropic_service_account_id: str | None = None
+    anthropic_workspace_id: str | None = None
+    ai_watch_minutes: Annotated[float, Field(gt=0)] = 30.0
+    """How often the AI credentials are checked (a free call), and how often
+    the LINE push quota is looked at."""
+    line_quota_warn_percent: Annotated[int, Field(ge=1, le=100)] = 80
+    """Admins are told once a month when LINE pushes reach this share of the
+    monthly limit."""
     ai_model: str = "claude-opus-5-5"
     ai_effort: Literal["low", "medium", "high"] = "low"
     """Low by default: reading one message is easy, and on LINE the reply has
@@ -320,6 +334,10 @@ class Settings(BaseSettings):
         "line_channel_secret",
         "line_channel_access_token",
         "anthropic_api_key",
+        "anthropic_federation_rule_id",
+        "anthropic_organization_id",
+        "anthropic_service_account_id",
+        "anthropic_workspace_id",
         mode="before",
     )
     @classmethod
@@ -347,6 +365,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"REMINDARR_{present} is set but REMINDARR_{missing} is not. "
                 "LINE needs both (or neither, to leave it disabled)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _one_way_to_reach_claude(self) -> Settings:
+        """A key *and* federation would leave which one is in use to the SDK's
+        precedence rules; half a federation config would silently mean no AI."""
+        rule, org = self.anthropic_federation_rule_id, self.anthropic_organization_id
+        if (rule is None) != (org is None):
+            raise ValueError(
+                "REMINDARR_ANTHROPIC_FEDERATION_RULE_ID and REMINDARR_ANTHROPIC_ORGANIZATION_ID "
+                "go together: set both for keyless AI, or neither."
+            )
+        if rule is not None and self.anthropic_api_key is not None:
+            raise ValueError(
+                "Both REMINDARR_ANTHROPIC_API_KEY and a federation rule are set. Pick one: "
+                "remove the key once federation works."
             )
         return self
 

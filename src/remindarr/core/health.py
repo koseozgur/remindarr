@@ -8,6 +8,10 @@ app already records:
   succeeded, so a dead database shows up here too), and
 * the newest backup isn't overdue.
 
+AI is reported too (``"ai": "ok" | "degraded" | "off"``) but never fails the
+check: the bot still works without it, so a rejected key is an admin notice
+(see ``core.watch``), not a page.
+
 An external uptime check polls this and alerts on anything but 200. The body
 is a small JSON object with ages in seconds and nothing about users or
 reminders, because the endpoint is public.
@@ -22,6 +26,8 @@ from typing import Any
 
 import structlog
 from aiohttp import web
+
+from remindarr.ai.reading import AiStatus
 
 from .backup import Backups
 from .clock import utcnow
@@ -41,6 +47,8 @@ class Health:
     tick_seconds: float
     started_at: datetime
     clock: Callable[[], datetime] = utcnow
+    ai: AiStatus | None = None
+    """None when no AI is configured."""
 
     def check(self) -> tuple[bool, dict[str, Any]]:
         now = self.clock()
@@ -72,6 +80,11 @@ class Health:
                 body["backup_age_s"] = round(age.total_seconds())
                 if age > backup_limit:
                     problems.append("backups are overdue")
+
+        if self.ai is None:
+            body["ai"] = "off"
+        else:
+            body["ai"] = "ok" if self.ai.ok else "degraded"
 
         body["ok"] = not problems
         if problems:

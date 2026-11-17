@@ -73,15 +73,26 @@ class FakeLineApi:
     requests: list[tuple[str, dict[str, str], dict[str, Any]]] = field(default_factory=list)
     push_responses: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
     reply_status: int = 200
+    quota_body: dict[str, Any] = field(default_factory=lambda: {"type": "limited", "value": 200})
+    usage_body: dict[str, Any] = field(default_factory=lambda: {"totalUsage": 42})
 
     def app(self) -> web.Application:
         app = web.Application()
+        app.router.add_get("/v2/bot/message/quota", self._quota)
+        app.router.add_get("/v2/bot/message/quota/consumption", self._usage)
         app.router.add_post("/v2/bot/message/push", self._push)
         app.router.add_post("/v2/bot/message/reply", self._reply)
         return app
 
     async def _record(self, request: web.Request) -> None:
         self.requests.append((request.path, dict(request.headers), await request.json()))
+
+    async def _quota(self, request: web.Request) -> web.Response:
+        assert request.headers["Authorization"] == f"Bearer {TOKEN}"
+        return web.json_response(self.quota_body)
+
+    async def _usage(self, request: web.Request) -> web.Response:
+        return web.json_response(self.usage_body)
 
     async def _push(self, request: web.Request) -> web.Response:
         await self._record(request)
@@ -622,3 +633,17 @@ def test_trusted_proxies_setting_parses() -> None:
     )
     with pytest.raises(ValueError):
         Settings(_env_file=None, trusted_proxies="not-a-net")
+
+
+class TestQuota:
+    async def test_limited_plan(self, line: LineAdapter) -> None:
+        assert await line.quota() == (200, 42)
+
+    async def test_no_limit(self, line: LineAdapter, api: FakeLineApi) -> None:
+        api.quota_body = {"type": "none"}
+        assert await line.quota() == (None, 42)
+
+    async def test_garbage_is_an_error(self, line: LineAdapter, api: FakeLineApi) -> None:
+        api.usage_body = {"nope": 1}
+        with pytest.raises(DeliveryError):
+            await line.quota()

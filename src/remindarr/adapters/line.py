@@ -289,6 +289,37 @@ class LineAdapter:
         except (aiohttp.ClientError, TimeoutError) as exc:
             log.warning("line.reply_failed", error=f"{type(exc).__name__}: {exc}")
 
+    # --- quota ---------------------------------------------------------------
+
+    async def quota(self) -> tuple[int | None, int]:
+        """``(monthly limit or None, pushes used this month)``.
+
+        Both endpoints are free to call. LINE calls the usage figure
+        approximate; it's for a warning, not accounting. Raises
+        :class:`DeliveryError` if either call fails.
+        """
+        limit_body = await self._get_json("/v2/bot/message/quota")
+        usage_body = await self._get_json("/v2/bot/message/quota/consumption")
+        limit: int | None = None
+        if limit_body.get("type") == "limited" and isinstance(limit_body.get("value"), int):
+            limit = int(limit_body["value"])
+        used = usage_body.get("totalUsage")
+        if not isinstance(used, int):
+            raise DeliveryError("line quota: no totalUsage in the response")
+        return limit, used
+
+    async def _get_json(self, path: str) -> dict[str, Any]:
+        try:
+            async with self._http().get(path) as resp:
+                if resp.status != 200:
+                    raise DeliveryError(f"line {path}: HTTP {resp.status}")
+                data = await resp.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
+            raise DeliveryError(f"line {path}: {type(exc).__name__}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise DeliveryError(f"line {path}: unexpected response")
+        return data
+
     # --- delivery ------------------------------------------------------------
 
     async def send(self, message: OutgoingMessage) -> None:

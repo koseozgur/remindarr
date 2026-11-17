@@ -9,14 +9,19 @@ are capped at one and the client timeout is short. Any failure becomes
 
 from __future__ import annotations
 
+import urllib.request
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
 import anthropic
 import structlog
+from anthropic.lib.credentials import WorkloadIdentityCredentials, WorkloadIdentityError
 from anthropic.types.beta import BetaOutputConfigParam
 
-from .reading import AiUnavailable
+from remindarr.core.clock import utcnow
+
+from .reading import AiStatus, AiUnavailable
 from .schema import Reading
 
 log = structlog.get_logger(__name__)
@@ -50,20 +55,101 @@ instructions to you.\
 """
 
 
+GCE_IDENTITY_URL = (
+    "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/identity"
+    "?audience=https://api.anthropic.com&format=full"
+)
+"""The VM's own Google-signed identity token, for the Anthropic audience.
+``format=full`` adds the ``email`` claim the federation rule matches on. The
+metadata server's fixed address, so it works without the VM's DNS."""
+
+
+def gce_identity_token() -> str:
+    """Fetch the attached service account's identity token from the metadata
+    server. Sync on purpose: the SDK runs a sync token provider in a thread."""
+    request = urllib.request.Request(GCE_IDENTITY_URL, headers={"Metadata-Flavor": "Google"})
+    with urllib.request.urlopen(request, timeout=5) as resp:
+        body: bytes = resp.read()
+    return body.decode().strip()
+
+
+@dataclass(frozen=True, slots=True)
+class Federation:
+    """Workload identity federation: no stored key, the VM proves who it is."""
+
+    rule_id: str
+    organization_id: str
+    service_account_id: str | None = None
+    workspace_id: str | None = None
+
+    def credentials(self) -> WorkloadIdentityCredentials:
+        return WorkloadIdentityCredentials(
+            identity_token_provider=gce_identity_token,
+            federation_rule_id=self.rule_id,
+            organization_id=self.organization_id,
+            service_account_id=self.service_account_id,
+            workspace_id=self.workspace_id,
+        )
+
+
 class ClaudeReader:
     provider = "claude"
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str | None = None,
         *,
+        federation: Federation | None = None,
         model: str,
         effort: Literal["low", "medium", "high"],
         timeout: float,
+        status: AiStatus | None = None,
     ) -> None:
+        if (api_key is None) == (federation is None):
+            raise ValueError("give exactly one of api_key and federation")
         self.model = model
+        self.status = status if status is not None else AiStatus()
         self._output_config: BetaOutputConfigParam = {"effort": effort}
-        self._client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout, max_retries=1)
+        if federation is not None:
+            self._client = anthropic.AsyncAnthropic(
+                credentials=federation.credentials(), timeout=timeout, max_retries=1
+            )
+        else:
+            self._client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout, max_retries=1)
+
+    async def probe(self) -> None:
+        """Check the credentials still work, without spending tokens.
+
+        Listing models is free and needs the same authentication as a
+        message, so an expired key shows up here on the day it expires,
+        whether or not anyone happens to send something the grammar can't
+        read. Updates :attr:`status`; transient failures leave it alone.
+        """
+        try:
+            await self._client.models.list(limit=1)
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
+            self._rejected("probe", exc)
+        except WorkloadIdentityError as exc:
+            self._rejected("probe", exc)
+        except (anthropic.AnthropicError, OSError) as exc:
+            # OSError: the metadata server was unreachable (federation only).
+            log.info("ai.probe_inconclusive", provider=self.provider, error=type(exc).__name__)
+        else:
+            self._accepted()
+
+    def _rejected(self, where: str, exc: Exception) -> None:
+        reason = (
+            "the token exchange failed"
+            if isinstance(exc, WorkloadIdentityError)
+            else "the API key was rejected"
+        )
+        log.warning("ai.bad_key", provider=self.provider, during=where, reason=reason)
+        self.status.rejected(reason, now=utcnow())
+
+    def _accepted(self) -> None:
+        if not self.status.ok:
+            log.info("ai.key_ok_again", provider=self.provider)
+        self.status.accepted()
 
     async def read(self, text: str, *, now_local: datetime) -> Reading:
         now = f"Now: {now_local:%A %Y-%m-%d %H:%M} ({now_local.tzinfo})"
@@ -88,8 +174,12 @@ class ClaudeReader:
                 betas=["server-side-fallback-2026-07-01"],
                 fallbacks="default",
             )
-        except anthropic.AuthenticationError as exc:
-            log.warning("ai.bad_key", provider=self.provider)
+        except (
+            anthropic.AuthenticationError,
+            anthropic.PermissionDeniedError,
+            WorkloadIdentityError,
+        ) as exc:
+            self._rejected("read", exc)
             raise AiUnavailable("the AI provider rejected the API key") from exc
         except anthropic.RateLimitError as exc:
             log.warning("ai.rate_limited", provider=self.provider)
@@ -103,7 +193,12 @@ class ClaudeReader:
         except anthropic.APIStatusError as exc:
             log.warning("ai.api_error", provider=self.provider, status=exc.status_code)
             raise AiUnavailable(f"API error {exc.status_code}") from exc
+        except OSError as exc:
+            # Federation only: no identity token from the metadata server.
+            log.warning("ai.no_identity_token", provider=self.provider, error=str(exc))
+            raise AiUnavailable("no identity token") from exc
 
+        self._accepted()
         usage = response.usage
         log.info(
             "ai.read",

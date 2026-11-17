@@ -130,6 +130,12 @@ gcloud compute ssh remindarr --project=$P --zone=$Z --tunnel-through-iap --comma
   cd /opt/remindarr/deploy/gcp && sudo docker compose up -d --build'
 ```
 
+**Once, for the deploy that adds the pinned network** (`172.28.0.0/24` in
+`compose.yml`, which `REMINDARR_TRUSTED_PROXIES` names): run
+`sudo docker compose down` before `up`, so the network is recreated with that
+subnet. It is untested on the VM. If the subnet clashes with something there,
+change both values together.
+
 The database and certificates live outside `/opt/remindarr`, so replacing the
 source tree does not touch them. Changing only an env file needs
 `sudo docker compose up -d --force-recreate` in `/opt/remindarr/deploy/gcp`.
@@ -157,8 +163,110 @@ newest backup is under 49 hours old, and 503 with a `problems` list otherwise
 succeeded, so a broken database shows up as "scheduler is not ticking". Any
 other path gets a 404 from Caddy.
 
+The body also has `"ai": "ok" | "degraded" | "off"`. A rejected AI
+credential shows as `degraded` but **never** turns the check into a 503: the
+bot still works without AI, so an expired key shouldn't page anyone.
+
 Both containers are `restart: unless-stopped` and Docker is enabled on boot,
 so a reboot brings everything back (verified 2026-11-08).
+
+## Admin notices
+
+Every 30 minutes (`REMINDARR_AI_WATCH_MINUTES`) the app checks two things that
+would otherwise fail quietly, and messages every admin once when one goes
+wrong. The message arrives like a reminder, on the admin's `/deliver` app (or
+any app but LINE, which is metered), starting with "Admin notice:".
+
+- **AI credentials.** A free call (listing models) tests the key. When Claude
+  rejects it, admins hear about it once, and again only after it has worked
+  in between. Logs: `ai.bad_key`, then `watch.notice`.
+- **LINE push quota.** At 80% of the monthly limit
+  (`REMINDARR_LINE_QUOTA_WARN_PERCENT`), once a month. LINE calls its usage
+  figure approximate. Log: `line.quota` on every check.
+
+Both are remembered in memory, so a restart while a problem persists sends the
+notice once more.
+
+## Rotating the Claude API key
+
+The key is a 30-day key; the current one expires **2026-12-17**. The keyless
+setup below makes this whole section unnecessary.
+
+1. In the Claude Console (platform.claude.com → API keys), create a new key
+   with an expiry. Keep the old one for now.
+2. On the dev Mac, write the line to a file nobody else can read, and copy it
+   over IAP. The key never goes on a command line:
+
+   ```bash
+   umask 077; printf 'REMINDARR_ANTHROPIC_API_KEY=%s\n' "$(pbpaste)" > /tmp/anthropic.env
+   gcloud compute scp /tmp/anthropic.env remindarr:/tmp/ --project=$P --zone=$Z --tunnel-through-iap
+   rm /tmp/anthropic.env
+   ```
+
+3. On the VM, swap that one line in the env file and restart the app:
+
+   ```bash
+   sudo sh -c 'umask 077; grep -v "^REMINDARR_ANTHROPIC_API_KEY=" /etc/remindarr/remindarr.env \
+       > /etc/remindarr/remindarr.env.new && cat /tmp/anthropic.env >> /etc/remindarr/remindarr.env.new \
+       && mv /etc/remindarr/remindarr.env.new /etc/remindarr/remindarr.env'
+   shred -u /tmp/anthropic.env
+   cd /opt/remindarr/deploy/gcp && sudo docker compose up -d --force-recreate remindarr
+   ```
+
+4. Check: `sudo docker compose logs remindarr | grep ai.` shows `ai.enabled`
+   and no `ai.bad_key`; `/healthz` says `"ai": "ok"` (the first check runs at
+   startup).
+5. Delete the old key in the Console.
+
+These exact commands haven't been run yet. The first rotation is their test.
+
+## Keyless AI: workload identity federation
+
+The Claude API accepts a Google-signed identity token from the VM in place of
+an API key (Anthropic's docs: *Workload Identity Federation*, and *Use WIF
+with Google Cloud*). The VM swaps its own identity token for a short-lived
+Anthropic token, and the SDK refreshes it. Nothing is stored, and nothing
+expires on a calendar. The app supports it (`anthropic` 2.9.0's
+`WorkloadIdentityCredentials`), but **it has not been run on the VM yet.**
+Untested so far: that the container reaches the metadata server at
+169.254.169.254, and the Console setup itself.
+
+The docs require a user-managed service account attached to the VM, not the
+Compute Engine default. `remindarr-backup` is one. Fetching its identity token
+needs no extra IAM role. The federation rule pins it by numeric id.
+
+1. Get the service account's numeric id:
+
+   ```bash
+   gcloud iam service-accounts describe remindarr-backup@$P.iam.gserviceaccount.com \
+       --format='value(uniqueId)'
+   ```
+
+2. In the Claude Console, go to Settings → Workload identity federation →
+   Connect workload → Google Cloud. The issuer is `https://accounts.google.com`
+   (discovery). The rule should match audience `https://api.anthropic.com`
+   **and** both claims, `sub` (the numeric id) and `email` (the account's
+   email). Use scope `workspace:developer`. Never use a `subject_prefix` for
+   Google tokens: per the docs, a wildcard matches service accounts in every
+   project. Note the rule id (`fdrl_…`), the organization id, and the
+   Anthropic service account id (`svac_…`).
+3. In `/etc/remindarr/remindarr.env`, **remove** `REMINDARR_ANTHROPIC_API_KEY`
+   (config refuses both at once) and add:
+
+   ```
+   REMINDARR_ANTHROPIC_FEDERATION_RULE_ID=fdrl_...
+   REMINDARR_ANTHROPIC_ORGANIZATION_ID=<uuid>
+   REMINDARR_ANTHROPIC_SERVICE_ACCOUNT_ID=svac_...
+   # REMINDARR_ANTHROPIC_WORKSPACE_ID=wrkspc_...   only if the rule covers several
+   ```
+
+   None of these are secrets, but they go in the same file anyway.
+4. `sudo docker compose up -d --force-recreate remindarr`, then check that the
+   logs show `ai.enabled ... auth=federation` and no `ai.bad_key`, and that
+   `/healthz` says `"ai": "ok"`. If the exchange is denied, the reason is on
+   the Console's authentication history page. The API's own answer is a bare
+   401.
+5. Delete the API key in the Console.
 
 ## Backup and restore
 
@@ -270,7 +378,5 @@ database first if you want to keep it.
 
 ## Known gaps
 
-- Behind Caddy, `line.bad_signature` logs Caddy's container address as
-  `remote`, not the caller's.
 - No alert yet. Planned: a Cloud Monitoring uptime check on `/healthz` with
   an email alert.
