@@ -6,6 +6,15 @@ replaces intent.
 
 **Working name is `remindarr` (the folder name), deliberately a placeholder.
 Pick a real name before family uses it — they'll see it in LINE and Discord.**
+It has nothing to do with the *arr stack any more, so assume it will change:
+keep user-visible names and identifiers in one easy-to-rename place.
+
+**Favourite so far (2026-11-17, not final): "Ima".** Japanese 今 ("now"),
+Turkish *ima* ("a hint"), easy in English, and two syllables in all three. The
+users include Japanese and Turkish family, the Turkish side on chat apps or
+Android. Not yet checked: availability on LINE, Discord, the App Store and
+domains, or a native-speaker check of the readings. Runners-up: Unutma,
+Tamam, Koko, Oboe.
 
 ---
 
