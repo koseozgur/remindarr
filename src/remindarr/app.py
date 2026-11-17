@@ -5,15 +5,18 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import signal
+from datetime import timedelta
 
 import structlog
 
 from remindarr.adapters.base import CaptureAdapter, DeliveryAdapter, DeliveryRegistry
 from remindarr.ai.reading import Reader
 from remindarr.config import Settings
+from remindarr.core.backup import Backups, sqlite_path
 from remindarr.core.clock import utcnow
 from remindarr.core.db import create_engine, create_session_factory, init_schema, session_scope
 from remindarr.core.directory import BootstrapResult, bootstrap
+from remindarr.core.health import Health, HealthServer
 from remindarr.core.router import Router
 from remindarr.core.scheduler import Scheduler
 
@@ -73,6 +76,20 @@ def build_reader(settings: Settings) -> Reader | None:
     )
 
 
+def build_backups(settings: Settings) -> Backups | None:
+    """Nightly copies, for a SQLite file database only."""
+    db_path = sqlite_path(settings.database_url)
+    if db_path is None:
+        log.info("backup.disabled", reason="not a SQLite file database")
+        return None
+    return Backups(
+        db_path=db_path,
+        backup_dir=settings.backup_dir or db_path.parent / "backups",
+        interval=timedelta(hours=settings.backup_interval_hours),
+        keep=settings.backup_keep,
+    )
+
+
 def warn_if_nobody_allowed(result: BootstrapResult) -> None:
     """Deny-by-default would otherwise make a fresh install look broken."""
     if result.users == 0:
@@ -123,7 +140,19 @@ async def run(settings: Settings) -> None:
 
     scheduler = Scheduler(settings=settings, session_factory=session_factory, registry=registry)
 
+    backups = build_backups(settings)
+    health_server: HealthServer | None = None
+    if settings.health_port is not None:
+        health = Health(
+            scheduler=scheduler,
+            backups=backups,
+            tick_seconds=settings.tick_seconds,
+            started_at=utcnow(),
+        )
+        health_server = HealthServer(health, host=settings.health_host, port=settings.health_port)
+
     started: list[CaptureAdapter] = []
+    tasks: list[asyncio.Task[None]] = []
     stop_signal = asyncio.Event()
 
     loop = asyncio.get_running_loop()
@@ -144,14 +173,23 @@ async def run(settings: Settings) -> None:
             timezone=settings.default_timezone,
         )
 
-        scheduler_task = asyncio.create_task(scheduler.run())
+        tasks.append(asyncio.create_task(scheduler.run()))
+        if backups is not None:
+            tasks.append(asyncio.create_task(backups.run()))
+        if health_server is not None:
+            await health_server.start()
         await stop_signal.wait()
 
         log.info("remindarr.shutting_down")
         scheduler.stop()
+        if backups is not None:
+            backups.stop()
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(scheduler_task, timeout=10)
+            await asyncio.wait_for(asyncio.gather(*tasks), timeout=10)
     finally:
+        if health_server is not None:
+            with contextlib.suppress(Exception):
+                await health_server.stop()
         for adapter in started:
             with contextlib.suppress(Exception):
                 await adapter.stop()
