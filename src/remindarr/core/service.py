@@ -98,6 +98,29 @@ async def list_pending(session: AsyncSession, *, subscriber_ids: list[int]) -> l
     return list((await session.execute(stmt)).scalars())
 
 
+async def list_pending_for_user(session: AsyncSession, *, user_id: int) -> list[Reminder]:
+    """Everything a person has pending, from whichever app they set it on."""
+    stmt = (
+        select(Reminder)
+        .join(Subscriber, Reminder.subscriber_id == Subscriber.id)
+        .where(Subscriber.user_id == user_id, Reminder.state == ReminderState.PENDING)
+        .order_by(Reminder.due_at, Reminder.id)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def get_reminder_for_user(
+    session: AsyncSession, *, user_id: int, reminder_id: int
+) -> Reminder | None:
+    """Scoped to the user, like :func:`get_reminder` is to a subscriber."""
+    stmt = (
+        select(Reminder)
+        .join(Subscriber, Reminder.subscriber_id == Subscriber.id)
+        .where(Reminder.id == reminder_id, Subscriber.user_id == user_id)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
 async def get_reminder(
     session: AsyncSession, *, subscriber_ids: list[int], reminder_id: int
 ) -> Reminder | None:

@@ -24,6 +24,7 @@ CODE_LENGTH = 8
 
 INVITE_TTL = timedelta(hours=24)
 LINK_TTL = timedelta(minutes=10)
+PAIR_TTL = timedelta(minutes=10)
 
 _FORGIVEN = str.maketrans({"O": "0", "I": "1", "L": "1"})
 
@@ -46,6 +47,17 @@ def normalize(raw: str) -> str | None:
 
 def code_hash(code: str) -> str:
     return hashlib.sha256(code.encode("ascii")).hexdigest()
+
+
+def new_token() -> str:
+    """A device's bearer token: 256 random bits, shown to the app once."""
+    return secrets.token_urlsafe(32)
+
+
+def token_hash(token: str) -> str:
+    """Tokens are random, not passwords, so a plain SHA-256 is the right
+    hash: there's nothing for a slow hash to protect against."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 @dataclass(slots=True)

@@ -182,6 +182,11 @@ class Settings(BaseSettings):
     backups are current, 503 otherwise. Unset means no health server."""
     health_host: str = "0.0.0.0"
 
+    api_port: Annotated[int, Field(ge=1, le=65535)] | None = None
+    """Serves the app API (``/api/v1/...``) when set. Unset means no API: the
+    bot works exactly as without it. Plain HTTP; TLS is the proxy's job."""
+    api_host: str = "0.0.0.0"
+
     log_level: str = "INFO"
     log_json: bool = False
 
@@ -351,6 +356,22 @@ class Settings(BaseSettings):
         if isinstance(v, str) and not v.strip():
             return None
         return v
+
+    @model_validator(mode="after")
+    def _listeners_dont_collide(self) -> Settings:
+        """Two listeners on one port fail at bind time with an opaque error."""
+        ports: dict[int, str] = {}
+        candidates = [("REMINDARR_HEALTH_PORT", self.health_port)]
+        candidates.append(("REMINDARR_API_PORT", self.api_port))
+        if self.line_enabled:
+            candidates.append(("REMINDARR_WEBHOOK_PORT", self.webhook_port))
+        for name, port in candidates:
+            if port is None:
+                continue
+            if port in ports:
+                raise ValueError(f"{name} and {ports[port]} are both {port}")
+            ports[port] = name
+        return self
 
     @model_validator(mode="after")
     def _line_needs_both_credentials(self) -> Settings:

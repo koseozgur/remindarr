@@ -1,8 +1,9 @@
 """Persistence model.
 
 ``users`` is a human, ``subscribers`` is one of their chat identities,
-``reminders`` is what and when, and ``access_codes`` are the short-lived codes
-that bring a new identity in (``/join``, ``/link``).
+``reminders`` is what and when, ``access_codes`` are the short-lived codes
+that bring a new identity or device in (``/join``, ``/link``, ``/pair``), and
+``devices`` are paired app installs, each with its own revocable token.
 
 An identity is allowed to use the bot exactly when it is linked to a user.
 There is no separate allow-list to drift out of sync with that.
@@ -131,6 +132,8 @@ class CodeKind(enum.StrEnum):
     """Made by an admin for a named newcomer; redeemed with ``/join``."""
     LINK = "link"
     """Made by a user; redeemed with ``/link`` from their other app."""
+    PAIR = "pair"
+    """Made by a user with ``/pair``; redeemed by the app for a device token."""
 
 
 class AccessCode(Base):
@@ -149,13 +152,33 @@ class AccessCode(Base):
     )
     code_hash: Mapped[str] = mapped_column(String(64), unique=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
-    """LINK: whose identity this adds. INVITE: unset."""
+    """LINK: whose identity this adds. PAIR: whose device this pairs. INVITE:
+    unset."""
     invite_name: Mapped[str | None] = mapped_column(String(64), default=None)
     """INVITE: the name the newcomer will get."""
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(UtcDateTime())
     used_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), default=None)
+
+
+class Device(Base):
+    """One paired app install. Only a hash of its bearer token is stored.
+
+    Revoking sets ``revoked_at`` rather than deleting the row, so ``/devices``
+    history and "why was I signed out?" stay answerable. ``/remove`` deletes a
+    user's devices outright, along with the user.
+    """
+
+    __tablename__ = "devices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(64))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=utcnow)
+    last_seen_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), default=None)
+    revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), default=None)
 
 
 class Reminder(Base):

@@ -6,6 +6,15 @@ replaces intent.
 
 **Working name is `remindarr` (the folder name), deliberately a placeholder.
 Pick a real name before family uses it — they'll see it in LINE and Discord.**
+It has nothing to do with the *arr stack any more, so assume it will change:
+keep user-visible names and identifiers in one easy-to-rename place.
+
+**Favourite so far (2026-11-17, not final): "Ima".** Japanese 今 ("now"),
+Turkish *ima* ("a hint"), easy in English, and two syllables in all three. The
+users include Japanese and Turkish family, the Turkish side on chat apps or
+Android. Not yet checked: availability on LINE, Discord, the App Store and
+domains, or a native-speaker check of the readings. Runners-up: Unutma,
+Tamam, Koko, Oboe.
 
 ---
 
@@ -296,9 +305,22 @@ Verified live by the owner the same day.
 5. **The iPhone app foundation:** phase 2 of the users design, i.e.
    `/pair`, device tokens and the v1 API behind Caddy's `/api/*`. Xcode 27.2
    works on the dev Mac (macOS 27.2.1), with the iOS simulator runtime
-   downloaded.
+   downloaded. **Server side and a SwiftUI scaffold (`ios/`) merged
+   2026-11-17 (PR #10); not deployed, no Caddy route yet.** First real-iPhone
+   round trip the same day: free-tier signed, it paired with the Mac's dev
+   server (`scripts/dev_api.py --host 0.0.0.0 serve`) over home Wi-Fi, and a
+   reminder created in the app fired on time. Gotcha: the phone's "Verify
+   App" for a free-tier developer failed silently until a phone restart.
+   Next: deploy with your own domain (PRs #10 and #11 together), then local
+   notifications in the app. The app's name
+   and bundle id live only in `ios/Config/App.xcconfig`.
 6. **Lists (in the narrow form above) plus location triggers** in the native
    iOS app. Location triggers must not slide off the roadmap.
+
+**To do (2026-11-17), once the v1 API is public:** a Siri Shortcut ("Dictate
+Text" → POST to the v1 API with the device token → speak the confirmation).
+It needs no app and survives the free tier's 7-day re-signing. App Intents
+inside the app can follow later.
 
 **Owner request (2026-11-17), once the app is running:** invites by
 **email** rather than a code pasted into chat. Not designed yet. It needs an
