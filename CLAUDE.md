@@ -315,8 +315,16 @@ Verified live by the owner the same day.
    reminder created in the app fired on time. Gotcha: the phone's "Verify
    App" for a free-tier developer failed silently until a phone restart.
    **Live 2026-11-17:** PRs #10 and #11 deployed on `bot.ozkose.dev`, and the
-   owner's iPhone paired against production. Next: local notifications in the
-   app. TestFlight needs the paid program; defer it until family iPhones want
+   owner's iPhone paired against production. **Phone notifications live the
+   same day (PR #12):** "where reminders arrive" is phone, both or chat, per
+   user, set in the app or with `/deliver`. "Phone only" skips chat only when
+   the phone has proved in the last 24h that it scheduled that reminder.
+   Verified on the real iPhone: a locked-phone notification, and the server
+   logged `delivery.phone_only`. Local Debug builds start signed in from the
+   git-ignored `ios/Config/Local.xcconfig`. Renew the free signing with ▶ and
+   **don't delete the app**: deleting it drops the developer trust, so the
+   Verify step comes back. Siri (App Intent and the no-app Shortcut in
+   `docs/siri-shortcut.md`) is built but untested by voice. TestFlight needs the paid program; defer it until family iPhones want
    the app. The app's name
    and bundle id live only in `ios/Config/App.xcconfig`.
 6. **Lists (in the narrow form above) plus location triggers** in the native
