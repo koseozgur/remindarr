@@ -21,9 +21,7 @@ struct RemindIntent: AppIntent {
         }
         do {
             let created = try await client.create(text)
-            if let reminders = try? await client.reminders() {
-                await PhoneNotifications.sync(reminders)
-            }
+            _ = try? await PhoneNotifications.refresh(using: client)
             return .result(value: created.confirmation, dialog: "\(created.confirmation)")
         } catch {
             throw IntentFailure(error.localizedDescription)

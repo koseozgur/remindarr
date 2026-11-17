@@ -181,6 +181,39 @@ class Device(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), default=None)
 
 
+class PhoneDelivery(Base):
+    """Whether a user's own reminders come as phone notifications, chat
+    messages, or both (``core.phone``). No row means chat only.
+
+    Its own table rather than a column on ``users`` so existing databases
+    gain it without a rebuild: ``create_all`` adds tables, not columns.
+    """
+
+    __tablename__ = "phone_delivery"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(8))
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime(), default=utcnow)
+
+
+class DeviceSync(Base):
+    """A paired app's last report of what it scheduled on the phone.
+
+    The scheduler trusts the phone with a reminder only if this says the app
+    saw it, scheduled it, and has notifications on (``phone.covers``).
+    """
+
+    __tablename__ = "device_syncs"
+
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    synced_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    """Server time of the reminder list the app scheduled from."""
+    notifications: Mapped[bool] = mapped_column(Boolean)
+    complete: Mapped[bool] = mapped_column(Boolean)
+    """False when iOS's pending-notification cap made the app drop some."""
+
+
 class Reminder(Base):
     __tablename__ = "reminders"
     __table_args__ = (

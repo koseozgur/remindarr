@@ -32,10 +32,8 @@ struct AppMain: App {
         // for a while. iOS decides when (and whether) this runs.
         .backgroundTask(.appRefresh(AppConfig.refreshTaskID)) {
             Self.scheduleRefresh()
-            guard let client = Session.storedClient(),
-                  let reminders = try? await client.reminders()
-            else { return }
-            await PhoneNotifications.sync(reminders)
+            guard let client = Session.storedClient() else { return }
+            _ = try? await PhoneNotifications.refresh(using: client)
         }
     }
 

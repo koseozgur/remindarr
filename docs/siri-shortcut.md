@@ -66,5 +66,6 @@ What comes back (verified against the dev server):
   that.\n\nTry something like “call mom tomorrow at 9”."}`.
 - Bad or revoked token: HTTP 401 with `{"error": "unauthorized"}`.
 
-The reminder arrives where your chat reminders do (your `/deliver` app), and
-on the phone too if the app is installed with notifications on.
+The reminder arrives wherever your setting says (`/deliver` in chat, or the
+app's settings). Under "phone only", one set by this Shortcut comes by chat
+until the app next refreshes, because the phone hasn't seen it yet.

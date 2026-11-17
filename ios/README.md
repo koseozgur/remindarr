@@ -5,24 +5,27 @@ reminders, set new ones, cancel by swiping, and get them as phone
 notifications too. "Set a reminder" also works from Siri and Spotlight (see
 [`docs/siri-shortcut.md`](../docs/siri-shortcut.md)).
 
-## Phone notifications
+## Phone notifications and where reminders arrive
 
-Once there's something in the list, the app offers **Notify me on this phone
-too**; iOS asks for permission only when that's tapped. With it on, the app
-schedules a local notification for each of your pending reminders: the next
-10 occurrences of a repeating one, the soonest 60 in all (iOS keeps at most
-64). Reminders you set for someone else aren't scheduled; ones others set for
-you don't appear in your list, so they aren't either.
+The menu's **Where reminders arrive** picks phone only, phone and chat, or
+chat only, plus the chat app. It's the same setting as `/deliver` in chat.
+On a fresh install everything goes to chat; once there's something in the
+list the app offers **Notify me on this phone too**, which asks iOS for
+permission and switches to phone and chat.
 
-There's no remote push (that needs Apple's paid program), so the phone only
-knows what it saw at its last refresh: opening the app, pull to refresh,
-setting or cancelling a reminder in the app, or a background refresh, which
-iOS runs when it chooses. A reminder set or cancelled in chat shows up, or
-stops, on the phone after the next one.
+With the phone in play, the app schedules a local notification for each of
+your own pending reminders: the next 10 occurrences of a repeating one, the
+soonest 60 in all (iOS keeps at most 64). There's no remote push (that needs
+Apple's paid program), so the phone knows only what it saw at its last
+refresh: opening the app, pull to refresh, a change made in the app or by
+Siri, or a background refresh, which iOS runs when it chooses. After each
+refresh the app tells the server what it scheduled.
 
-**Each reminder currently arrives twice**, as a phone notification and on
-your chat app, because the server doesn't know about the phone. Whether to
-change that is an open decision; see `docs/design/users-and-app-api.md`.
+**Phone only** relies on that report: the server skips chat for a reminder
+only when this phone has reported having it scheduled within the last day,
+with notifications on. Anything else (one set in chat since the last
+refresh, notifications off, the app not opened for a day) still comes by
+chat. Details: `docs/design/users-and-app-api.md`.
 
 ## Renaming
 

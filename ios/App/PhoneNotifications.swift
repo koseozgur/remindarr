@@ -44,10 +44,14 @@ enum PhoneNotifications {
     /// Only what's no longer wanted is removed: removal is applied
     /// asynchronously, so removing an id and adding it straight back can lose
     /// it. Adding an id that's already pending replaces it.
-    static func sync(_ reminders: [Reminder], now: Date = .now) async {
+    /// Returns whether everything wanted fit under iOS's cap; false also
+    /// when notifications aren't allowed, so nothing was scheduled.
+    @discardableResult
+    static func sync(_ reminders: [Reminder], now: Date = .now) async -> Bool {
         let center = UNUserNotificationCenter.current()
-        guard [.authorized, .provisional].contains(await status()) else { return }
-        let wanted = plan(reminders, now: now)
+        guard await allowed() else { return false }
+        let all = plan(reminders, now: now, limit: .max)
+        let wanted = Array(all.prefix(limit))
         let wantedIDs = Set(wanted.map(\.id))
         let stale = await center.pendingNotificationRequests()
             .map(\.identifier).filter { $0.hasPrefix(prefix) && !wantedIDs.contains($0) }
@@ -68,16 +72,44 @@ enum PhoneNotifications {
                 log.error("schedule failed: \(error.localizedDescription, privacy: .public)")
             }
         }
-        log.info("scheduled \(wanted.count) removed \(stale.count)")
+        log.info("scheduled \(wanted.count) of \(all.count), removed \(stale.count)")
+        return wanted.count == all.count
+    }
+
+    static func allowed() async -> Bool {
+        [.authorized, .provisional].contains(await status())
+    }
+
+    /// The whole round trip, shared by the app, background refresh and Siri:
+    /// read the setting and the list, schedule (or clear, under "chat only"),
+    /// and tell the server what this phone now covers. "Phone only" skips
+    /// chat only for what such a report covers.
+    @discardableResult
+    static func refresh(using client: APIClient) async throws -> (DeliverySettings, [Reminder]) {
+        async let settingsCall = client.settings()
+        async let listCall = client.reminders()
+        let (settings, list) = try await (settingsCall, listCall)
+        var complete = false
+        if settings.schedulesOnPhone {
+            complete = await sync(list.reminders)
+        } else {
+            await removeAllNow()
+        }
+        let notifying = settings.schedulesOnPhone ? await allowed() : false
+        try? await client.reportSync(
+            asOf: list.asOf, notifications: notifying, complete: complete)
+        return (settings, list.reminders)
+    }
+
+    static func removeAllNow() async {
+        let center = UNUserNotificationCenter.current()
+        let ours = await center.pendingNotificationRequests()
+            .map(\.identifier).filter { $0.hasPrefix(prefix) }
+        center.removePendingNotificationRequests(withIdentifiers: ours)
     }
 
     static func removeAll() {
-        let center = UNUserNotificationCenter.current()
-        Task {
-            let ours = await center.pendingNotificationRequests()
-                .map(\.identifier).filter { $0.hasPrefix(prefix) }
-            center.removePendingNotificationRequests(withIdentifiers: ours)
-        }
+        Task { await removeAllNow() }
     }
 }
 

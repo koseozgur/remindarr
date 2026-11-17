@@ -22,15 +22,25 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from remindarr.ai.reading import AI_NOTE, AiUnavailable, Reader, to_reminder
 from remindarr.config import PLATFORM_NAMES, Settings, valid_person_name
 
-from . import access, delivery, devices, i18n, service
+from . import access, delivery, devices, i18n, phone, service
 from .clock import utcnow
 from .db import session_scope
 from .directory import Directory, bootstrap, identity_row
 from .directory import load as load_directory
 from .humanize import format_next, format_when
-from .models import AccessCode, CodeKind, Device, Reminder, ReminderState, Subscriber, User
+from .models import (
+    AccessCode,
+    CodeKind,
+    Device,
+    DeviceSync,
+    PhoneDelivery,
+    Reminder,
+    ReminderState,
+    Subscriber,
+    User,
+)
 from .timeparse import TimeParseError, parse
-from .types import USER_PREFIX, IncomingMessage, ParsedReminder, Reply, Route
+from .types import USER_PREFIX, IncomingMessage, ParsedReminder, Reply, Route, Sender
 
 log = structlog.get_logger(__name__)
 
@@ -51,6 +61,7 @@ Commands:
   /cancel <id>     drop one
   /tz <zone>       set your timezone (e.g. /tz Asia/Tokyo)
   /deliver <app>   where reminders you set in a 1:1 chat go (or "here")
+  /deliver phone   phone notifications instead of chat (also: both, chat)
   /link            connect another app to you
   /pair            a code to sign in to the phone app
   /devices         paired phones; /unpair <n> signs one out
@@ -521,30 +532,24 @@ class Router:
         user = await session.get(User, subscriber.user_id) if subscriber.user_id else None
         assert user is not None
         choice = arg.strip().lower()
+        now = message.received_at
         if not choice:
-            current = (
-                f"on {PLATFORM_NAMES.get(user.deliver_on, user.deliver_on)}"
-                if user.deliver_on
-                else "wherever you set them"
-            )
             return Reply(
-                f"Reminders you set in a 1:1 chat arrive {current}. "
-                "Change it with /deliver line, /deliver discord or /deliver here."
+                await describe_delivery(session, user, now)
+                + "\nChange the app with /deliver line, /deliver discord or /deliver here; "
+                "the phone with /deliver phone, /deliver both or /deliver chat."
             )
-        if choice in ("here", "off", "same"):
-            user.deliver_on = None
+        if choice in phone.MODES:
+            if choice != "chat" and not await devices.list_devices(session, user_id=user.id):
+                return Reply("Pair the phone app first: send /pair and enter the code in it.")
+            await phone.set_mode(session, user.id, choice, now)
+            return Reply("Done. " + await describe_delivery(session, user, now))
+        error = choose_chat_app(user, choice, people, message.sender)
+        if error is not None:
+            return Reply(error)
+        if user.deliver_on is None:
             return Reply("Done: reminders arrive wherever you set them.")
-        if choice not in PLATFORM_NAMES:
-            return Reply(f"I don't know the app “{arg.strip()}”. Try line, discord or here.")
-        name = PLATFORM_NAMES[choice]
-        if choice not in people.enabled_platforms:
-            return Reply(f"{name} isn't set up here.")
-        person = people.person_of(message.sender.platform, message.sender.user_id)
-        if person is None or person.user_id_on(choice) is None:
-            return Reply(
-                f"You haven't linked {name} yet. Send /link here, then send the code from {name}."
-            )
-        user.deliver_on = choice
+        name = PLATFORM_NAMES[user.deliver_on]
         return Reply(f"Done: reminders you set in a 1:1 chat now arrive on {name}.")
 
     async def _invite(
@@ -643,10 +648,52 @@ class Router:
                 or_(AccessCode.user_id == user.id, AccessCode.created_by == user.id)
             )
         )
+        await session.execute(delete(DeviceSync).where(DeviceSync.user_id == user.id))
+        await session.execute(delete(PhoneDelivery).where(PhoneDelivery.user_id == user.id))
         await session.execute(delete(Device).where(Device.user_id == user.id))
         await session.delete(user)
         log.info("access.removed", user=name, cancelled=len(pending))
         return Reply(f"Removed {name}. Cancelled {len(pending)} pending reminder(s).")
+
+
+def choose_chat_app(user: User, choice: str, people: Directory, sender: Sender) -> str | None:
+    """Set ``user.deliver_on`` from ``/deliver <app>`` (or the app's
+    settings). Returns why not, or ``None`` when done."""
+    if choice in ("here", "off", "same"):
+        user.deliver_on = None
+        return None
+    if choice not in PLATFORM_NAMES:
+        return f"I don't know the app “{choice}”. Try line, discord or here."
+    name = PLATFORM_NAMES[choice]
+    if choice not in people.enabled_platforms:
+        return f"{name} isn't set up here."
+    person = people.person_of(sender.platform, sender.user_id)
+    if person is None or person.user_id_on(choice) is None:
+        return f"You haven't linked {name} yet. Send /link here, then send the code from {name}."
+    user.deliver_on = choice
+    return None
+
+
+async def describe_delivery(session: AsyncSession, user: User, now: datetime) -> str:
+    """Where a user's reminders arrive, in one or two lines: ``/deliver``'s
+    answer, and the same thing the app's settings screen shows."""
+    chat = (
+        f"on {PLATFORM_NAMES.get(user.deliver_on, user.deliver_on)}"
+        if user.deliver_on
+        else "wherever you set them"
+    )
+    mode = await phone.mode_of(session, user.id)
+    if mode == "chat":
+        return f"Reminders you set in a 1:1 chat arrive {chat}."
+    if mode == "both":
+        return f"Reminders arrive on your phone and {chat}."
+    line = f"Reminders arrive on your phone, or {chat} when the phone isn't ready."
+    if not await phone.phone_ready(session, user.id, now):
+        line += (
+            " Right now it isn't (no recent check-in with notifications on), "
+            "so they're going to chat. Open the app to fix that."
+        )
+    return line
 
 
 async def _platforms_of(session: AsyncSession, subscriber_ids: list[int]) -> dict[int, str]:
