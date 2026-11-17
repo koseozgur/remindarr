@@ -261,6 +261,24 @@ class TestReminders:
         assert "call mom tomorrow at 9" in error
         assert "/help" not in error  # a chat command means nothing in the app
 
+    async def test_japanese_text_gets_japanese_answers(
+        self, client: Client, router: Router
+    ) -> None:
+        token = await paired_token(client, router)
+        resp = await client.post(
+            "/api/v1/reminders", headers=bearer(token), json={"text": "母に電話 tomorrow at 9"}
+        )
+        assert resp.status == 201, await resp.text()
+        assert (await resp.json())["confirmation"].startswith("了解です。「母に電話」")
+
+        resp = await client.post(
+            "/api/v1/reminders", headers=bearer(token), json={"text": "いつか何かする"}
+        )
+        assert resp.status == 422
+        error = (await resp.json())["error"]
+        assert error.startswith("すみません")
+        assert "call mom" not in error  # no English hint glued on
+
     @pytest.mark.parametrize("text", ["", "   ", None, 7, "/list"])
     async def test_bad_text(self, client: Client, router: Router, text: object) -> None:
         token = await paired_token(client, router)

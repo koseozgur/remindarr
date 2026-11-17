@@ -6,11 +6,11 @@ import asyncio
 import contextlib
 import signal
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 import structlog
 
 from remindarr.adapters.base import CaptureAdapter, DeliveryAdapter, DeliveryRegistry
-from remindarr.ai.reading import Reader
 from remindarr.config import Settings
 from remindarr.core.api import Api, ApiServer
 from remindarr.core.backup import Backups, sqlite_path
@@ -20,6 +20,10 @@ from remindarr.core.directory import BootstrapResult, bootstrap
 from remindarr.core.health import Health, HealthServer
 from remindarr.core.router import Router
 from remindarr.core.scheduler import Scheduler
+from remindarr.core.watch import QuotaSource, Watch
+
+if TYPE_CHECKING:
+    from remindarr.ai.claude import ClaudeReader
 
 log = structlog.get_logger(__name__)
 
@@ -56,21 +60,40 @@ def build_adapters(settings: Settings) -> list[object]:
                 host=settings.webhook_host,
                 port=settings.webhook_port,
                 path=settings.line_webhook_path,
+                trusted_proxies=settings.trusted_proxies,
             )
         )
 
     return adapters
 
 
-def build_reader(settings: Settings) -> Reader | None:
-    """The optional AI reader, if a provider key is configured."""
-    if settings.anthropic_api_key is None:
+def build_reader(settings: Settings) -> ClaudeReader | None:
+    """The optional AI reader, if a provider key or federation is configured."""
+    if settings.anthropic_api_key is None and settings.anthropic_federation_rule_id is None:
         return None
-    from remindarr.ai.claude import ClaudeReader
+    from remindarr.ai.claude import ClaudeReader, Federation
 
-    log.info("ai.enabled", provider="claude", model=settings.ai_model, effort=settings.ai_effort)
+    federation = None
+    if settings.anthropic_federation_rule_id is not None:
+        assert settings.anthropic_organization_id is not None  # config pairs them
+        federation = Federation(
+            rule_id=settings.anthropic_federation_rule_id,
+            organization_id=settings.anthropic_organization_id,
+            service_account_id=settings.anthropic_service_account_id,
+            workspace_id=settings.anthropic_workspace_id,
+        )
+    log.info(
+        "ai.enabled",
+        provider="claude",
+        model=settings.ai_model,
+        effort=settings.ai_effort,
+        auth="federation" if federation is not None else "api_key",
+    )
     return ClaudeReader(
-        settings.anthropic_api_key.get_secret_value(),
+        settings.anthropic_api_key.get_secret_value()
+        if settings.anthropic_api_key is not None
+        else None,
+        federation=federation,
         model=settings.ai_model,
         effort=settings.ai_effort,
         timeout=settings.ai_timeout_seconds,
@@ -125,9 +148,8 @@ async def run(settings: Settings) -> None:
         result = await bootstrap(session, settings, now=utcnow())
     warn_if_nobody_allowed(result)
 
-    router = Router(
-        settings=settings, session_factory=session_factory, reader=build_reader(settings)
-    )
+    reader = build_reader(settings)
+    router = Router(settings=settings, session_factory=session_factory, reader=reader)
     router._bootstrapped = True
 
     # The protocols are runtime-checkable, so an adapter declares which halves
@@ -149,12 +171,21 @@ async def run(settings: Settings) -> None:
             backups=backups,
             tick_seconds=settings.tick_seconds,
             started_at=utcnow(),
+            ai=reader.status if reader is not None else None,
         )
         health_server = HealthServer(health, host=settings.health_host, port=settings.health_port)
     api_server: ApiServer | None = None
     if settings.api_port is not None:
         api = Api(router=router, settings=settings, session_factory=session_factory)
         api_server = ApiServer(api, host=settings.api_host, port=settings.api_port)
+
+    line = next((a for a in adapters if getattr(a, "platform", None) == "line"), None)
+    watch = Watch(
+        settings=settings,
+        session_factory=session_factory,
+        ai=reader,
+        line=line if isinstance(line, QuotaSource) else None,
+    )
 
     started: list[CaptureAdapter] = []
     tasks: list[asyncio.Task[None]] = []
@@ -179,6 +210,7 @@ async def run(settings: Settings) -> None:
         )
 
         tasks.append(asyncio.create_task(scheduler.run()))
+        tasks.append(asyncio.create_task(watch.run()))
         if backups is not None:
             tasks.append(asyncio.create_task(backups.run()))
         if health_server is not None:
@@ -189,6 +221,7 @@ async def run(settings: Settings) -> None:
 
         log.info("remindarr.shutting_down")
         scheduler.stop()
+        watch.stop()
         if backups is not None:
             backups.stop()
         with contextlib.suppress(TimeoutError):

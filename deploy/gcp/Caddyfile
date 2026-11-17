@@ -1,9 +1,9 @@
 # HTTPS for {$REMINDARR_HOST} with an automatic Let's Encrypt certificate.
 # HTTP is redirected to HTTPS automatically; port 80 also answers ACME.
 #
-# Only the LINE webhook and the health check reach remindarr. Everything else -- including
-# the scanners that will find this host within hours -- gets a bare 404 from
-# Caddy and never touches the app.
+# Only the LINE webhook, the health check and the app API reach remindarr.
+# Everything else -- including the scanners that will find this host within
+# hours -- gets a bare 404 from Caddy and never touches the app.
 
 {$REMINDARR_HOST} {
 	handle /line/webhook {
@@ -13,6 +13,15 @@
 	# Ages in seconds and ok/not-ok; nothing about users or reminders.
 	handle /healthz {
 		reverse_proxy remindarr:8081
+	}
+
+	# The app API (v1). Every route but pairing needs a device token; the app
+	# caps bodies at 4 KB itself, and Caddy refuses anything far bigger.
+	handle /api/* {
+		request_body {
+			max_size 64KB
+		}
+		reverse_proxy remindarr:8082
 	}
 
 	handle {

@@ -8,6 +8,7 @@ startup error rather than a silently disabled platform.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import zoneinfo
 from dataclasses import dataclass
@@ -109,6 +110,12 @@ class Settings(BaseSettings):
     webhook_host: str = "0.0.0.0"
     webhook_port: Annotated[int, Field(ge=1, le=65535)] = 8080
     line_webhook_path: str = "/line/webhook"
+    trusted_proxies: Annotated[
+        tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...], NoDecode
+    ] = ()
+    """CIDRs of the reverse proxy in front of the webhook, comma-separated.
+    Only a request from one of these has its ``X-Forwarded-For`` believed, and
+    only for logging the caller's address. Empty trusts nobody."""
 
     tick_seconds: Annotated[float, Field(gt=0)] = 15.0
     """How often the scheduler looks for due reminders."""
@@ -144,6 +151,20 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     """Turns on the optional AI reader (Claude) for messages the grammar can't
     parse. Unset means no AI at all: the bot works exactly as without it."""
+    anthropic_federation_rule_id: str | None = None
+    """Keyless alternative to ``anthropic_api_key``: workload identity
+    federation, where a GCE VM swaps its own Google identity token for a
+    short-lived Anthropic one. Needs ``anthropic_organization_id`` too, and a
+    federation rule set up in the Claude Console (docs/deploy-gcp.md)."""
+    anthropic_organization_id: str | None = None
+    anthropic_service_account_id: str | None = None
+    anthropic_workspace_id: str | None = None
+    ai_watch_minutes: Annotated[float, Field(gt=0)] = 30.0
+    """How often the AI credentials are checked (a free call), and how often
+    the LINE push quota is looked at."""
+    line_quota_warn_percent: Annotated[int, Field(ge=1, le=100)] = 80
+    """Admins are told once a month when LINE pushes reach this share of the
+    monthly limit."""
     ai_model: str = "claude-opus-5-5"
     ai_effort: Literal["low", "medium", "high"] = "low"
     """Low by default: reading one message is easy, and on LINE the reply has
@@ -292,6 +313,19 @@ class Settings(BaseSettings):
             people.append(Person(name, frozenset(identities), deliver_on))
         return tuple(people)
 
+    @field_validator("trusted_proxies", mode="before")
+    @classmethod
+    def _parse_trusted_proxies(cls, v: object) -> object:
+        """``172.28.0.0/24, ::1`` -> networks; a bare address is a /32 (or /128)."""
+        if v is None:
+            return ()
+        if not isinstance(v, str):
+            return v
+        try:
+            return tuple(ipaddress.ip_network(x.strip()) for x in v.split(",") if x.strip())
+        except ValueError as exc:
+            raise ValueError(f"trusted_proxies: {exc}") from exc
+
     @field_validator("line_webhook_path")
     @classmethod
     def _validate_webhook_path(cls, v: str) -> str:
@@ -305,6 +339,10 @@ class Settings(BaseSettings):
         "line_channel_secret",
         "line_channel_access_token",
         "anthropic_api_key",
+        "anthropic_federation_rule_id",
+        "anthropic_organization_id",
+        "anthropic_service_account_id",
+        "anthropic_workspace_id",
         mode="before",
     )
     @classmethod
@@ -348,6 +386,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"REMINDARR_{present} is set but REMINDARR_{missing} is not. "
                 "LINE needs both (or neither, to leave it disabled)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _one_way_to_reach_claude(self) -> Settings:
+        """A key *and* federation would leave which one is in use to the SDK's
+        precedence rules; half a federation config would silently mean no AI."""
+        rule, org = self.anthropic_federation_rule_id, self.anthropic_organization_id
+        if (rule is None) != (org is None):
+            raise ValueError(
+                "REMINDARR_ANTHROPIC_FEDERATION_RULE_ID and REMINDARR_ANTHROPIC_ORGANIZATION_ID "
+                "go together: set both for keyless AI, or neither."
+            )
+        if rule is not None and self.anthropic_api_key is not None:
+            raise ValueError(
+                "Both REMINDARR_ANTHROPIC_API_KEY and a federation rule are set. Pick one: "
+                "remove the key once federation works."
             )
         return self
 

@@ -35,8 +35,10 @@ import base64
 import contextlib
 import hashlib
 import hmac
+import ipaddress
 import json
 from collections import OrderedDict
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -87,6 +89,7 @@ class LineAdapter:
         port: int = 8080,
         path: str = "/line/webhook",
         api_base: str = DEFAULT_API_BASE,
+        trusted_proxies: Iterable[ipaddress.IPv4Network | ipaddress.IPv6Network] = (),
     ) -> None:
         self._secret = channel_secret.encode()
         self._token = channel_access_token
@@ -94,6 +97,7 @@ class LineAdapter:
         self._port = port
         self._path = path
         self._api_base = api_base.rstrip("/")
+        self._trusted_proxies = tuple(trusted_proxies)
 
         self._handler: CoreHandler | None = None
         self._session: aiohttp.ClientSession | None = None
@@ -163,7 +167,14 @@ class LineAdapter:
         # Before anything else, and over the raw bytes: re-serialised JSON
         # would not hash the same.
         if not self._signature_ok(body, request.headers.get("x-line-signature")):
-            log.warning("line.bad_signature", remote=request.remote)
+            log.warning(
+                "line.bad_signature",
+                remote=caller_address(
+                    request.remote,
+                    request.headers.get("X-Forwarded-For"),
+                    self._trusted_proxies,
+                ),
+            )
             return web.Response(status=401)
 
         try:
@@ -278,6 +289,37 @@ class LineAdapter:
         except (aiohttp.ClientError, TimeoutError) as exc:
             log.warning("line.reply_failed", error=f"{type(exc).__name__}: {exc}")
 
+    # --- quota ---------------------------------------------------------------
+
+    async def quota(self) -> tuple[int | None, int]:
+        """``(monthly limit or None, pushes used this month)``.
+
+        Both endpoints are free to call. LINE calls the usage figure
+        approximate; it's for a warning, not accounting. Raises
+        :class:`DeliveryError` if either call fails.
+        """
+        limit_body = await self._get_json("/v2/bot/message/quota")
+        usage_body = await self._get_json("/v2/bot/message/quota/consumption")
+        limit: int | None = None
+        if limit_body.get("type") == "limited" and isinstance(limit_body.get("value"), int):
+            limit = int(limit_body["value"])
+        used = usage_body.get("totalUsage")
+        if not isinstance(used, int):
+            raise DeliveryError("line quota: no totalUsage in the response")
+        return limit, used
+
+    async def _get_json(self, path: str) -> dict[str, Any]:
+        try:
+            async with self._http().get(path) as resp:
+                if resp.status != 200:
+                    raise DeliveryError(f"line {path}: HTTP {resp.status}")
+                data = await resp.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
+            raise DeliveryError(f"line {path}: {type(exc).__name__}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise DeliveryError(f"line {path}: unexpected response")
+        return data
+
     # --- delivery ------------------------------------------------------------
 
     async def send(self, message: OutgoingMessage) -> None:
@@ -322,6 +364,35 @@ class LineAdapter:
         if status >= 500:
             raise DeliveryError(f"line server error {status}: {error}")
         raise DeliveryError(f"line rejected the push ({status}): {error}", permanent=True)
+
+
+def caller_address(
+    remote: str | None,
+    forwarded_for: str | None,
+    trusted: Iterable[ipaddress.IPv4Network | ipaddress.IPv6Network],
+) -> str | None:
+    """Who really sent the request, for logs.
+
+    Behind Caddy, ``request.remote`` is always Caddy. Caddy puts the real
+    caller in ``X-Forwarded-For`` (and, trusting no proxies of its own,
+    ignores whatever the client sent in that header). The header is believed
+    only when the direct peer is a trusted proxy, and only its last entry --
+    the address that proxy saw -- since anything to the left of it is what
+    the client claimed. Logging only: nothing about access depends on it.
+    """
+    if remote is None or not forwarded_for:
+        return remote
+    try:
+        peer = ipaddress.ip_address(remote)
+    except ValueError:
+        return remote
+    if not any(peer in net for net in trusted):
+        return remote
+    last = forwarded_for.rsplit(",", 1)[-1].strip()
+    try:
+        return str(ipaddress.ip_address(last))
+    except ValueError:
+        return remote
 
 
 def _route_of(source: object) -> Route | None:

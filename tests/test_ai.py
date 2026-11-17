@@ -21,6 +21,7 @@ from remindarr.ai.claude import ClaudeReader
 from remindarr.ai.reading import AI_NOTE, AiUnavailable, Unreadable, to_reminder
 from remindarr.ai.schema import Reading, Repeat
 from remindarr.config import Settings
+from remindarr.core import i18n
 from remindarr.core.models import Reminder
 from remindarr.core.router import Router
 from remindarr.core.timeparse import parse
@@ -171,8 +172,9 @@ class TestRouter:
         fake = FakeReader(reading(task="母に電話する", date="2026-08-19", time="15:00"))
         reply = await make_router(fake).handle(message("明日の午後3時に母に電話する"))
         assert reply is not None
-        assert "母に電話する" in reply.text and "15:00" in reply.text
-        assert AI_NOTE in reply.text
+        # Written in Japanese, so answered in Japanese: 15:00 tomorrow.
+        assert "「母に電話する」を明日 15:00" in reply.text
+        assert i18n.AI_NOTE in reply.text and AI_NOTE not in reply.text
         [text_sent, now_local] = fake.calls[0]
         assert text_sent == "明日の午後3時に母に電話する"
         assert now_local.tzinfo is not None and now_local.utcoffset() == TZ.utcoffset(now_local)
@@ -184,8 +186,7 @@ class TestRouter:
             reading(task="薬を飲む", date=None, time="08:00", repeat=weekly("mon", "thu"))
         )
         reply = await make_router(fake).handle(message("毎週月曜と木曜の8時に薬を飲む"))
-        assert reply is not None and "every Mon and Thu at 08:00" in reply.text
-        assert "薬を飲む" in reply.text
+        assert reply is not None and "「薬を飲む」を毎週月・木曜 8:00に" in reply.text
 
     async def test_a_half_read_time_goes_to_the_ai_not_into_the_task(
         self, make_router: Any

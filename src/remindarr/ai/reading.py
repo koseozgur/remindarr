@@ -12,6 +12,7 @@ from __future__ import annotations
 import calendar
 import re
 from collections.abc import Awaitable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -38,6 +39,33 @@ _HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 class AiUnavailable(RuntimeError):
     """The provider couldn't answer: network, timeout, quota, refusal, bad key."""
+
+
+@dataclass(slots=True)
+class AiStatus:
+    """Whether the provider is accepting our credentials.
+
+    Only a rejected credential counts. A timeout or a rate limit is ordinary
+    weather and clears itself; an expired key never does, and without this
+    it would only ever show as one log line per message the grammar couldn't
+    read. The health check and the admin notice both read it.
+    """
+
+    problem: str | None = None
+    since: datetime | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.problem is None
+
+    def rejected(self, reason: str, *, now: datetime) -> None:
+        if self.problem is None:
+            self.since = now
+        self.problem = reason
+
+    def accepted(self) -> None:
+        self.problem = None
+        self.since = None
 
 
 class Reader(Protocol):

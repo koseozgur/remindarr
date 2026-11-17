@@ -235,18 +235,34 @@ def setter_name(settings: People, platform: str, user_id: str, display_name: str
     return display_name or f"someone on {PLATFORM_NAMES.get(platform, platform)}"
 
 
-def disclosure(target: Delivery, here: Route, settings: People, sender: Sender) -> str | None:
+def disclosure(
+    target: Delivery, here: Route, settings: People, sender: Sender, *, lang: str = "en"
+) -> str | None:
     """What to tell the setter when the reminder will not arrive where they are."""
+    from . import i18n  # i18n imports recurrence; keep this module's imports light
+
     route = target.route
     name = PLATFORM_NAMES.get(route.platform, route.platform)
+    by = ""
     if target.recipient is not None:
         by = setter_name(settings, sender.platform, sender.user_id, sender.display_name)
-        return f"It'll go to {target.recipient} as a direct message on {name}, marked “from {by}”."
-    if route == here:
+        kind = "recipient"
+    elif route == here:
         return None
-    if route.platform == here.platform and route.is_direct_address:
+    elif route.platform == here.platform and route.is_direct_address:
+        kind = "dm_here"
+    elif route.platform == here.platform:
+        kind = "other_chat"
+    else:
+        kind = "other_app"
+
+    if lang == "ja":
+        return i18n.disclosure(recipient=target.recipient, by=by, app=name, kind=kind)
+    if kind == "recipient":
+        return f"It'll go to {target.recipient} as a direct message on {name}, marked “from {by}”."
+    if kind == "dm_here":
         return "I'll DM you when it's due."
-    if route.platform == here.platform:
+    if kind == "other_chat":
         return "It'll arrive in another chat."
     return f"It'll arrive as a direct message on {name}."
 

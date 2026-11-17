@@ -266,7 +266,11 @@ class Api:
         )
         result = await self._router.create(session, people, home, message, text, tz, now)
         if isinstance(result, Refused):
-            reason = f"{result.reason}\n\n{TRY_THIS}." if result.unreadable else result.reason
+            reason = (
+                f"{result.reason}\n\n{TRY_THIS}."
+                if result.unreadable and not result.localized
+                else result.reason
+            )
             return _error(422, reason)
         log.info("api.reminder_created", user=user.name, reminder_id=result.reminder.id)
         return web.json_response(

@@ -255,7 +255,7 @@ async def test_health_stale_tick(
     h = health_for(settings, session_factory, registry, clock)
     h.scheduler.last_tick = clock()
     clock.advance(timedelta(seconds=59))
-    assert h.check() == (True, {"ok": True, "scheduler_age_s": 59})
+    assert h.check() == (True, {"ok": True, "scheduler_age_s": 59, "ai": "off"})
 
     clock.advance(timedelta(seconds=2))
     ok, body = h.check()
@@ -304,7 +304,7 @@ async def test_health_endpoint(
     try:
         resp = await client.get("/healthz")
         assert resp.status == 200
-        assert await resp.json() == {"ok": True, "scheduler_age_s": 0}
+        assert await resp.json() == {"ok": True, "scheduler_age_s": 0, "ai": "off"}
 
         clock.advance(timedelta(minutes=10))
         resp = await client.get("/healthz")

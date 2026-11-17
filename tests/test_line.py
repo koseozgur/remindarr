@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import socket
 from collections.abc import AsyncIterator
@@ -20,9 +21,17 @@ import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
+from structlog.testing import capture_logs
 
 from remindarr.adapters.base import CaptureAdapter, DeliveryAdapter, DeliveryError
-from remindarr.adapters.line import MAX_MESSAGE_UTF16_UNITS, NO_SENDER_TEXT, LineAdapter, _truncate
+from remindarr.adapters.line import (
+    MAX_MESSAGE_UTF16_UNITS,
+    NO_SENDER_TEXT,
+    LineAdapter,
+    _truncate,
+    caller_address,
+)
+from remindarr.config import Settings
 from remindarr.core.types import IncomingMessage, OutgoingMessage, Reply, Route
 
 SECRET = "test-channel-secret"
@@ -64,15 +73,26 @@ class FakeLineApi:
     requests: list[tuple[str, dict[str, str], dict[str, Any]]] = field(default_factory=list)
     push_responses: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
     reply_status: int = 200
+    quota_body: dict[str, Any] = field(default_factory=lambda: {"type": "limited", "value": 200})
+    usage_body: dict[str, Any] = field(default_factory=lambda: {"totalUsage": 42})
 
     def app(self) -> web.Application:
         app = web.Application()
+        app.router.add_get("/v2/bot/message/quota", self._quota)
+        app.router.add_get("/v2/bot/message/quota/consumption", self._usage)
         app.router.add_post("/v2/bot/message/push", self._push)
         app.router.add_post("/v2/bot/message/reply", self._reply)
         return app
 
     async def _record(self, request: web.Request) -> None:
         self.requests.append((request.path, dict(request.headers), await request.json()))
+
+    async def _quota(self, request: web.Request) -> web.Response:
+        assert request.headers["Authorization"] == f"Bearer {TOKEN}"
+        return web.json_response(self.quota_body)
+
+    async def _usage(self, request: web.Request) -> web.Response:
+        return web.json_response(self.usage_body)
 
     async def _push(self, request: web.Request) -> web.Response:
         await self._record(request)
@@ -560,3 +580,70 @@ async def test_start_serves_the_webhook_on_the_configured_port() -> None:
             assert (ok.status, unsigned.status) == (200, 401)
     finally:
         await adapter.stop()
+
+
+PROXY = (ipaddress.ip_network("172.28.0.0/24"),)
+
+
+class TestCallerAddress:
+    def test_forwarded_for_believed_from_the_proxy(self) -> None:
+        assert caller_address("172.28.0.5", "203.0.113.9", PROXY) == "203.0.113.9"
+
+    def test_only_the_last_hop_counts(self) -> None:
+        # Anything left of the proxy's own entry is what the client claimed.
+        assert caller_address("172.28.0.5", "1.1.1.1, 203.0.113.9", PROXY) == "203.0.113.9"
+
+    def test_forwarded_for_ignored_from_anyone_else(self) -> None:
+        assert caller_address("198.51.100.7", "203.0.113.9", PROXY) == "198.51.100.7"
+
+    def test_no_trusted_proxies_means_the_peer(self) -> None:
+        assert caller_address("172.28.0.5", "203.0.113.9", ()) == "172.28.0.5"
+
+    def test_garbage_header_falls_back_to_the_peer(self) -> None:
+        assert caller_address("172.28.0.5", "not-an-ip", PROXY) == "172.28.0.5"
+        assert caller_address("172.28.0.5", None, PROXY) == "172.28.0.5"
+
+    def test_ipv6(self) -> None:
+        net = (ipaddress.ip_network("fd00::/64"),)
+        assert caller_address("fd00::2", "2001:db8::1", net) == "2001:db8::1"
+
+
+async def test_bad_signature_logs_the_real_caller(api: FakeLineApi) -> None:
+    adapter = LineAdapter(
+        SECRET, TOKEN, path=PATH, trusted_proxies=[ipaddress.ip_network("127.0.0.0/8")]
+    )
+    client: Client = TestClient(TestServer(adapter.webhook_app(RecordingHandler())))
+    await client.start_server()
+    try:
+        with capture_logs() as logs:
+            resp = await client.post(PATH, data=b"{}", headers={"X-Forwarded-For": "203.0.113.9"})
+        assert resp.status == 401
+        [entry] = [e for e in logs if e["event"] == "line.bad_signature"]
+        assert entry["remote"] == "203.0.113.9"
+    finally:
+        await client.close()
+        await adapter.stop()
+
+
+def test_trusted_proxies_setting_parses() -> None:
+    s = Settings(_env_file=None, trusted_proxies="172.28.0.0/24, ::1")
+    assert s.trusted_proxies == (
+        ipaddress.ip_network("172.28.0.0/24"),
+        ipaddress.ip_network("::1"),
+    )
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, trusted_proxies="not-a-net")
+
+
+class TestQuota:
+    async def test_limited_plan(self, line: LineAdapter) -> None:
+        assert await line.quota() == (200, 42)
+
+    async def test_no_limit(self, line: LineAdapter, api: FakeLineApi) -> None:
+        api.quota_body = {"type": "none"}
+        assert await line.quota() == (None, 42)
+
+    async def test_garbage_is_an_error(self, line: LineAdapter, api: FakeLineApi) -> None:
+        api.usage_body = {"nope": 1}
+        with pytest.raises(DeliveryError):
+            await line.quota()

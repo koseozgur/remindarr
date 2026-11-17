@@ -281,12 +281,17 @@ Verified live by the owner the same day.
    (`claude-opus-5-5`, low effort) reads only what the grammar can't; Japanese
    works, and its output is checked and built through `build_series`. Measured
    on the VM: 2.5–5 s per reading, about 1.4k tokens in and 100 out, so under
-   one US cent each. **The API key expires 2026-12-17** (30-day key); when it
-   does, AI reading silently falls back to the grammar, with only an `ai.bad_key`
-   log line. Rotate it before then, or move to workload identity federation
-   (the GCP VM authenticating as itself, with no stored key). Still open:
-   whether the Max plan's $100/month API credit applies to this key, a Gemini
-   reader, and Japanese *replies* (the bot's own text is English).
+   one US cent each. **The API key expires 2026-12-17** (30-day key). Since the
+   followups branch, a rejected key is loud: a free probe every 30 minutes,
+   one "Admin notice" in chat per episode, and `/healthz` says
+   `"ai": "degraded"` (never a 503). Rotation steps are in
+   `docs/deploy-gcp.md`. **Keyless is possible:** Anthropic's docs describe
+   workload identity federation from a GCE VM's Google identity token, and the
+   app supports it (`REMINDARR_ANTHROPIC_FEDERATION_*`). It is untested
+   against the real API; setup is in the runbook. Still open:
+   whether the Max plan's $100/month API credit applies to this key, and a
+   Gemini reader. Japanese replies: a message written in Japanese gets its
+   confirmation in Japanese; commands and delivered reminders stay English.
 3. **Reliability, before family depends on it.** Backups live 2026-11-17:
    the app takes a verified daily SQLite copy (keeps 14 on the VM), and an
    hourly host timer uploads new ones to a free-tier GCS bucket (30-day
@@ -330,7 +335,9 @@ sslip.io to a subdomain of one of the owner's own domains (`ozgurkose.com` or
 `ozkose.dev`, both being transferred to Cloudflare Registrar as of
 2026-11-17; one DNS A record, added by the owner).
 
-Small follow-ups: a warning before the 200/month LINE quota runs out (less
-urgent while the owner's deliveries go to Discord); `line.bad_signature` logs
-the proxy's address rather than the caller's; `/list` covering all of a
-person's apps; persistent dedupe if webhook redelivery is turned on.
+Small follow-ups done on the followups branch: a LINE quota warning to admins
+at 80% of the monthly cap; `line.bad_signature` logs the real caller
+(`REMINDARR_TRUSTED_PROXIES`, with the compose network pinned to
+172.28.0.0/24, which needs one `docker compose down` on deploy); `/list` and
+`/cancel` across all of a person's apps. Still open: persistent dedupe if
+webhook redelivery is turned on.

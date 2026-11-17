@@ -19,10 +19,10 @@ import structlog
 from sqlalchemy import delete, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from remindarr.ai.reading import AiUnavailable, Reader, to_reminder
+from remindarr.ai.reading import AI_NOTE, AiUnavailable, Reader, to_reminder
 from remindarr.config import PLATFORM_NAMES, Settings, valid_person_name
 
-from . import access, delivery, devices, service
+from . import access, delivery, devices, i18n, service
 from .clock import utcnow
 from .db import session_scope
 from .directory import Directory, bootstrap, identity_row
@@ -81,6 +81,9 @@ class Refused:
     reason: str
     unreadable: bool = False
     """No time could be read, as opposed to a routing refusal."""
+    localized: bool = False
+    """``reason`` is already a full answer in the sender's language, example
+    included, so callers mustn't append the English hint."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +128,8 @@ class Router:
                     return await self._redeem(session, message, command, rest, now)
                 identity = f"{sender.platform}:{sender.user_id}"
                 log.info("access.denied", user=identity, route=str(message.route))
-                return Reply(NOT_AUTHORISED.format(identity=identity))
+                refusal = i18n.NOT_AUTHORISED if i18n.language_of(text) == "ja" else NOT_AUTHORISED
+                return Reply(refusal.format(identity=identity))
 
             subscriber = await service.get_or_create_subscriber(
                 session,
@@ -146,9 +150,11 @@ class Router:
                 case "start" | "help" | "h":
                     return Reply(HELP + (ADMIN_HELP if is_admin else ""))
                 case "list" | "ls":
-                    return await self._list(session, subscriber.id, message.route, tz, now)
+                    mine = await service.identity_ids(session, subscriber)
+                    return await self._list(session, mine, subscriber.id, message.route, tz, now)
                 case "cancel" | "rm" | "del":
-                    return await self._cancel(session, subscriber.id, rest, tz, now)
+                    mine = await service.identity_ids(session, subscriber)
+                    return await self._cancel(session, mine, rest, tz, now)
                 case "tz" | "timezone":
                     return await self._timezone(session, subscriber, rest, now)
                 case "remind" | "r":
@@ -193,7 +199,7 @@ class Router:
     ) -> Reply:
         result = await self.create(session, people, subscriber, message, text, tz, now)
         if isinstance(result, Refused):
-            if result.unreadable:
+            if result.unreadable and not result.localized:
                 return Reply(f"{result.reason}\n\n{TRY_THIS}, or /help.")
             return Reply(result.reason)
         lines = [result.summary, f"id {result.reminder.id}", *result.notes]
@@ -220,11 +226,14 @@ class Router:
         if isinstance(target, delivery.Refusal):
             return Refused(target.reason)
 
+        lang = i18n.language_of(target.text)
         try:
             parsed = parse(target.text, now_utc=now, tz=tz)
         except TimeParseError as exc:
             ai_parsed = await self._ask_ai(target.text, now, tz)
             if ai_parsed is None:
+                if lang == "ja":
+                    return Refused(i18n.NOT_UNDERSTOOD, unreadable=True, localized=True)
                 return Refused(f"{exc}.", unreadable=True)
             parsed = ai_parsed
 
@@ -240,17 +249,32 @@ class Router:
             recurrence=parsed.recurrence,
         )
         series = service.series_of(reminder)
-        if series is not None:
-            nxt = format_next(parsed.due_at, tz, now_utc=now)
-            when = f"{series.describe()}, next: {nxt}"
+        if lang == "ja":
+            if series is not None:
+                nxt = i18n.format_next(parsed.due_at, tz, now_utc=now)
+                summary = i18n.confirmation_series(
+                    parsed.text, i18n.describe(series), nxt, reminder.id
+                )[0]
+            else:
+                when = i18n.format_when(parsed.due_at, tz, now_utc=now)
+                summary = i18n.confirmation(parsed.text, when, reminder.id)[0]
         else:
-            when = format_when(parsed.due_at, tz, now_utc=now)
+            if series is not None:
+                nxt = format_next(parsed.due_at, tz, now_utc=now)
+                when = f"{series.describe()}, next: {nxt}"
+            else:
+                when = format_when(parsed.due_at, tz, now_utc=now)
+            summary = f"Got it — “{parsed.text}” {when}."
         notes: list[str] = []
-        where = delivery.disclosure(target, message.route, people, message.sender)
+        where = delivery.disclosure(target, message.route, people, message.sender, lang=lang)
         if where is not None:
             notes.append(where)
-        notes.extend(f"note: {w}" for w in parsed.warnings)
-        return Created(reminder, f"Got it — “{parsed.text}” {when}.", tuple(notes))
+        for w in parsed.warnings:
+            if lang == "ja":
+                notes.append(f"※ {i18n.AI_NOTE if w == AI_NOTE else w}")
+            else:
+                notes.append(f"note: {w}")
+        return Created(reminder, summary, tuple(notes))
 
     async def _ask_ai(self, text: str, now: datetime, tz: ZoneInfo) -> ParsedReminder | None:
         """The AI's reading, or None to fall back on the grammar's refusal.
@@ -273,12 +297,16 @@ class Router:
     async def _list(
         self,
         session: AsyncSession,
-        subscriber_id: int,
+        subscriber_ids: list[int],
+        here_subscriber: int,
         here: Route,
         tz: ZoneInfo,
         now: datetime,
     ) -> Reply:
-        pending = await service.list_pending(session, subscriber_id=subscriber_id)
+        """Everything the person set, on any app they've linked; rows set on
+        another app say where."""
+        pending = await service.list_pending(session, subscriber_ids=subscriber_ids)
+        set_on = await _platforms_of(session, subscriber_ids)
         if not pending:
             return Reply("Nothing pending.")
         lines = ["Pending:"]
@@ -286,6 +314,9 @@ class Router:
             where = delivery.label(
                 Route(r.delivery_platform, r.delivery_address), here, r.recipient
             )
+            if r.subscriber_id != here_subscriber:
+                app = set_on.get(r.subscriber_id, "")
+                where += f" (set on {PLATFORM_NAMES.get(app, app)})"
             # "#3", not "3.": Discord renders "3. text" as a markdown ordered
             # list (renumbered, with extra spacing). "#3" with no space after
             # it is plain text everywhere.
@@ -304,13 +335,18 @@ class Router:
         return Reply("\n".join(lines))
 
     async def _cancel(
-        self, session: AsyncSession, subscriber_id: int, arg: str, tz: ZoneInfo, now: datetime
+        self,
+        session: AsyncSession,
+        subscriber_ids: list[int],
+        arg: str,
+        tz: ZoneInfo,
+        now: datetime,
     ) -> Reply:
         arg = arg.removeprefix("#")  # /list shows "#3", so "/cancel #3" must work
         if not arg.isdigit():
             return Reply("Which one? Use /cancel <id> — /list shows the ids.")
         reminder = await service.get_reminder(
-            session, subscriber_id=subscriber_id, reminder_id=int(arg)
+            session, subscriber_ids=subscriber_ids, reminder_id=int(arg)
         )
         if reminder is None:
             return Reply(f"No reminder with id {arg}.")
@@ -611,6 +647,13 @@ class Router:
         await session.delete(user)
         log.info("access.removed", user=name, cancelled=len(pending))
         return Reply(f"Removed {name}. Cancelled {len(pending)} pending reminder(s).")
+
+
+async def _platforms_of(session: AsyncSession, subscriber_ids: list[int]) -> dict[int, str]:
+    rows = await session.execute(
+        select(Subscriber.id, Subscriber.platform).where(Subscriber.id.in_(subscriber_ids))
+    )
+    return {sid: platform for sid, platform in rows}
 
 
 def _split_command(text: str) -> tuple[str | None, str]:
