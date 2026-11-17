@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ReminderListView: View {
     @Environment(Session.self) private var session
+    @Environment(\.scenePhase) private var phase
     @State private var composing = false
     @State private var error: String?
 
@@ -10,6 +11,13 @@ struct ReminderListView: View {
             List {
                 if let error {
                     Text(error).foregroundStyle(.red)
+                }
+                // Asked here, once there is something to be reminded of, and
+                // only when tapped: never as a pop-up on first launch.
+                if session.notifications == .notDetermined, !session.reminders.isEmpty {
+                    Button("Notify me on this phone too", systemImage: "bell.badge") {
+                        Task { await session.enableNotifications() }
+                    }
                 }
                 if session.reminders.isEmpty {
                     Text("Nothing pending.").foregroundStyle(.secondary)
@@ -25,6 +33,11 @@ struct ReminderListView: View {
             }
             .refreshable { await refresh() }
             .task { await refresh() }
+            // Coming back to the app re-reads the list, which also re-schedules
+            // the phone's notifications for anything set or cancelled in chat.
+            .onChange(of: phase) { _, now in
+                if now == .active { Task { await refresh() } }
+            }
             .navigationTitle(AppConfig.displayName)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {

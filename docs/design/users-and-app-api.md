@@ -91,7 +91,7 @@ All endpoints are JSON over HTTPS behind Caddy, authenticated with
 |---|---|---|
 | POST | `/api/v1/pair` | code + device name → token (the only unauthenticated call) |
 | GET | `/api/v1/me` | user, timezone, linked apps |
-| GET | `/api/v1/reminders` | the user's pending reminders (id, text, due_at, recurrence, where) |
+| GET | `/api/v1/reminders` | the user's pending reminders (id, text, due_at, upcoming, recurrence, where) |
 | POST | `/api/v1/reminders` | `{"text": "call mum tomorrow at 9"}`, parsed by the **same** grammar (and the AI plugin later), so the app and the chat behave identically |
 | DELETE | `/api/v1/reminders/{id}` | cancel |
 | DELETE | `/api/v1/devices/self` | sign out |
@@ -119,6 +119,34 @@ As built:
   someone could use it to block pairing for an hour, not to guess a code.
 - `/remove` deletes the user's devices; `/unpair` and sign-out set
   `revoked_at`.
+- Each reminder carries `upcoming`: its next occurrences in UTC, starting
+  with `due_at` (just that for a one-off, up to 10 for a series). The app
+  schedules phone notifications from it.
+
+### Phone notifications and chat delivery (open decision)
+
+The app schedules local notifications from `upcoming`, so today **a reminder
+arrives twice**: on the phone and on the user's chat app. The server is
+unchanged and doesn't know about the phone. This is deliberate for now: with
+no remote push (free signing), the phone only learns about a reminder set in
+chat when the app next refreshes, so chat is the only delivery that's sure to
+happen.
+
+Options, simplest first:
+
+1. **Keep both** (current). Nothing to build; the duplicate is the price of
+   never missing one.
+2. **A per-user "phone only" switch the server respects**: e.g. `/deliver
+   app`, under which the scheduler marks the user's reminders sent without a
+   chat message. Small to build, but a reminder set in chat after the phone's
+   last refresh would then reach no one. Safe only once there's remote push,
+   or if it applies just to reminders the phone has confirmed it scheduled.
+3. **Chat as a fallback**: the app reports what it scheduled, and the server
+   skips chat for exactly those. Correct, but it's a sync protocol, which is
+   more than this needs today.
+
+Recommendation: 1 now, and 2 once the paid program (remote push) is worth
+it. Changing server delivery needs the owner's OK first.
 
 ## Security notes
 

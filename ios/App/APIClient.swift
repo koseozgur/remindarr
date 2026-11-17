@@ -4,6 +4,8 @@ struct Reminder: Decodable, Identifiable, Sendable, Hashable {
     let id: Int
     let text: String
     let dueAt: Date
+    /// The next occurrences, starting with `dueAt` (just that, for a one-off).
+    let upcoming: [Date]
     /// The server's own wording ("tomorrow at 09:00"), in the user's timezone.
     let when: String
     let recurrence: String?
@@ -13,7 +15,7 @@ struct Reminder: Decodable, Identifiable, Sendable, Hashable {
     let forPerson: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, text, when, recurrence, app
+        case id, text, when, recurrence, app, upcoming
         case dueAt = "due_at"
         case forPerson = "for"
     }

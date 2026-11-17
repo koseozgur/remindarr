@@ -50,6 +50,10 @@ MAX_BODY_BYTES = 4096
 MAX_TEXT_CHARS = 2000
 """Discord's own message limit, so anything settable in chat fits here too."""
 
+UPCOMING = 10
+"""How many occurrences of a series ``upcoming`` lists. The app schedules phone
+notifications from them, and iOS keeps at most 64 pending across all of them."""
+
 HOME_ORDER = ("discord", "telegram", "line")
 """Which linked app an app-set reminder goes to when the user has no default.
 LINE comes last because its pushes count against a small monthly quota."""
@@ -100,6 +104,18 @@ def home_identity(
     return live[0] if live else None
 
 
+def upcoming(reminder: Reminder, limit: int = UPCOMING) -> list[datetime]:
+    """The next occurrences, starting with ``due_at``: one for a one-off."""
+    series = service.series_of(reminder)
+    times = [reminder.due_at]
+    while series is not None and len(times) < limit:
+        nxt = series.next_after(times[-1])
+        if nxt is None:
+            break
+        times.append(nxt)
+    return times
+
+
 def reminder_json(reminder: Reminder, tz: ZoneInfo, now: datetime) -> dict[str, Any]:
     series = service.series_of(reminder)
     if series is None:
@@ -110,6 +126,7 @@ def reminder_json(reminder: Reminder, tz: ZoneInfo, now: datetime) -> dict[str, 
         "id": reminder.id,
         "text": reminder.text,
         "due_at": _iso(reminder.due_at),
+        "upcoming": [_iso(t) for t in upcoming(reminder)],
         "when": when,
         "recurrence": series.describe() if series is not None else None,
         "app": reminder.delivery_platform,

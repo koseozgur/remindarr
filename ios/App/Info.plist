@@ -9,5 +9,19 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<!-- From Config/App.xcconfig; see AppConfig.swift. -->
+	<key>AppServerURL</key>
+	<string>$(APP_SERVER_URL)</string>
+	<key>AppBakedToken</key>
+	<string>$(APP_BAKED_TOKEN)</string>
+	<!-- Background refresh re-schedules the phone's notifications. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).refresh</string>
+	</array>
 </dict>
 </plist>

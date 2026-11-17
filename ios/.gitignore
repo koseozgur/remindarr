@@ -1,2 +1,4 @@
 xcuserdata/
 *.xcuserstate
+# Holds a device token. Never commit.
+Config/Local.xcconfig
