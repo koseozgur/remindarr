@@ -12,6 +12,7 @@ import structlog
 from remindarr.adapters.base import CaptureAdapter, DeliveryAdapter, DeliveryRegistry
 from remindarr.ai.reading import Reader
 from remindarr.config import Settings
+from remindarr.core.api import Api, ApiServer
 from remindarr.core.backup import Backups, sqlite_path
 from remindarr.core.clock import utcnow
 from remindarr.core.db import create_engine, create_session_factory, init_schema, session_scope
@@ -150,6 +151,10 @@ async def run(settings: Settings) -> None:
             started_at=utcnow(),
         )
         health_server = HealthServer(health, host=settings.health_host, port=settings.health_port)
+    api_server: ApiServer | None = None
+    if settings.api_port is not None:
+        api = Api(router=router, settings=settings, session_factory=session_factory)
+        api_server = ApiServer(api, host=settings.api_host, port=settings.api_port)
 
     started: list[CaptureAdapter] = []
     tasks: list[asyncio.Task[None]] = []
@@ -178,6 +183,8 @@ async def run(settings: Settings) -> None:
             tasks.append(asyncio.create_task(backups.run()))
         if health_server is not None:
             await health_server.start()
+        if api_server is not None:
+            await api_server.start()
         await stop_signal.wait()
 
         log.info("remindarr.shutting_down")
@@ -187,6 +194,9 @@ async def run(settings: Settings) -> None:
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(asyncio.gather(*tasks), timeout=10)
     finally:
+        if api_server is not None:
+            with contextlib.suppress(Exception):
+                await api_server.stop()
         if health_server is not None:
             with contextlib.suppress(Exception):
                 await health_server.stop()

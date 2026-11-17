@@ -291,7 +291,10 @@ Verified live by the owner the same day.
 5. **The iPhone app foundation:** phase 2 of the users design, i.e.
    `/pair`, device tokens and the v1 API behind Caddy's `/api/*`. Xcode 27.2
    works on the dev Mac (macOS 27.2.1), with the iOS simulator runtime
-   downloaded.
+   downloaded. **Server side and a SwiftUI scaffold (`ios/`) built
+   2026-11-17 in a draft PR, tested only against a local dev server
+   (`scripts/dev_api.py`)**; not deployed, no Caddy route yet. The app's name
+   and bundle id live only in `ios/Config/App.xcconfig`.
 6. **Lists (in the narrow form above) plus location triggers** in the native
    iOS app. Location triggers must not slide off the roadmap.
 

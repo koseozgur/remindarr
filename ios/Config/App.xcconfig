@@ -1,0 +1,15 @@
+// The ONE place the app's name and identity live.
+//
+// The product name is a placeholder and will change. When it does, edit
+// these two lines and nothing else: the home-screen name, the window titles
+// and the Keychain entry all read from them.
+//
+// The bundle identifier must be unique per Apple ID for free-tier signing.
+
+APP_DISPLAY_NAME = Remind
+PRODUCT_BUNDLE_IDENTIFIER = dev.ozkose.remind
+
+// Derived; no need to touch.
+INFOPLIST_KEY_CFBundleDisplayName = $(APP_DISPLAY_NAME)
+MARKETING_VERSION = 0.1
+CURRENT_PROJECT_VERSION = 1
