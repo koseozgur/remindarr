@@ -4,6 +4,8 @@ struct Reminder: Decodable, Identifiable, Sendable, Hashable {
     let id: Int
     let text: String
     let dueAt: Date
+    /// The next occurrences, starting with `dueAt` (just that, for a one-off).
+    let upcoming: [Date]
     /// The server's own wording ("tomorrow at 09:00"), in the user's timezone.
     let when: String
     let recurrence: String?
@@ -13,7 +15,7 @@ struct Reminder: Decodable, Identifiable, Sendable, Hashable {
     let forPerson: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, text, when, recurrence, app
+        case id, text, when, recurrence, app, upcoming
         case dueAt = "due_at"
         case forPerson = "for"
     }
@@ -31,8 +33,39 @@ struct Created: Decodable, Sendable {
     let notes: [String]
 }
 
+/// Where reminders arrive: the same setting as `/deliver` in chat.
+struct DeliverySettings: Decodable, Sendable, Equatable {
+    /// "chat", "both" or "phone".
+    var delivery: String
+    /// The chat app reminders go to; nil means wherever they were set.
+    var chatApp: String?
+    let apps: [String]
+    /// Whether the server has a recent report from a phone with notifications on.
+    let phoneReady: Bool
+    /// The server's own one-line description, as `/deliver` says it.
+    let summary: String
+
+    enum CodingKeys: String, CodingKey {
+        case delivery, apps, summary
+        case chatApp = "chat_app"
+        case phoneReady = "phone_ready"
+    }
+
+    var schedulesOnPhone: Bool { delivery != "chat" }
+}
+
+/// The reminder list, and the server time it was read at.
+struct ReminderList: Decodable, Sendable {
+    let reminders: [Reminder]
+    let asOf: String
+
+    enum CodingKeys: String, CodingKey {
+        case reminders
+        case asOf = "as_of"
+    }
+}
+
 private struct Paired: Decodable { let token: String }
-private struct ReminderList: Decodable { let reminders: [Reminder] }
 private struct ServerError: Decodable { let error: String }
 
 enum APIError: LocalizedError {
@@ -70,9 +103,27 @@ struct APIClient: Sendable {
 
     func me() async throws -> Me { try await send("GET", "me") }
 
-    func reminders() async throws -> [Reminder] {
-        let list: ReminderList = try await send("GET", "reminders")
-        return list.reminders
+    func reminders() async throws -> ReminderList { try await send("GET", "reminders") }
+
+    func settings() async throws -> DeliverySettings { try await send("GET", "settings") }
+
+    /// Change either or both. `chatApp: .some(nil)` means "wherever set".
+    func updateSettings(delivery: String? = nil, chatApp: String?? = nil) async throws
+        -> DeliverySettings
+    {
+        var body: [String: JSONValue] = [:]
+        if let delivery { body["delivery"] = .string(delivery) }
+        if let chatApp { body["chat_app"] = chatApp.map(JSONValue.string) ?? .null }
+        return try await send("PUT", "settings", json: body)
+    }
+
+    /// Tells the server what this phone scheduled, from the list read at `asOf`.
+    func reportSync(asOf: String, notifications: Bool, complete: Bool) async throws {
+        let body: [String: JSONValue] = [
+            "as_of": .string(asOf), "notifications": .bool(notifications),
+            "complete": .bool(complete),
+        ]
+        _ = try await perform(try request("POST", "devices/self/sync", json: body))
     }
 
     func create(_ text: String) async throws -> Created {
@@ -107,6 +158,12 @@ struct APIClient: Sendable {
     private func request(_ method: String, _ path: String, body: [String: String]?) throws
         -> URLRequest
     {
+        try request(method, path, json: body?.mapValues(JSONValue.string))
+    }
+
+    private func request(_ method: String, _ path: String, json body: [String: JSONValue]?) throws
+        -> URLRequest
+    {
         var req = URLRequest(url: base.appending(path: "api/v1/\(path)"))
         req.httpMethod = method
         req.timeoutInterval = 30  // AI reading on the server can take a few seconds
@@ -137,7 +194,30 @@ struct APIClient: Sendable {
         return try Self.decoder.decode(T.self, from: data)
     }
 
+    private func send<T: Decodable>(_ method: String, _ path: String, json: [String: JSONValue])
+        async throws -> T
+    {
+        let data = try await perform(try request(method, path, json: json))
+        return try Self.decoder.decode(T.self, from: data)
+    }
+
     private func sendNoContent(_ method: String, _ path: String) async throws {
         _ = try await perform(try request(method, path, body: nil))
+    }
+}
+
+/// Just enough JSON for request bodies with strings, booleans and null.
+enum JSONValue: Encodable, Sendable {
+    case string(String)
+    case bool(Bool)
+    case null
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .string(let v): try c.encode(v)
+        case .bool(let v): try c.encode(v)
+        case .null: try c.encodeNil()
+        }
     }
 }

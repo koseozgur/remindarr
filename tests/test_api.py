@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 
 import pytest
 from aiohttp import web
@@ -210,6 +211,7 @@ class TestReminders:
         expected = datetime(2026, 8, 19, 9, 0, tzinfo=TZ).astimezone(UTC)
         assert reminder["due_at"] == expected.isoformat().replace("+00:00", "Z")
         assert reminder["recurrence"] is None
+        assert reminder["upcoming"] == [reminder["due_at"]]
         assert body["confirmation"].startswith("Got it — “call mum”")
         # No default app: Discord before LINE, whose pushes are metered.
         assert reminder["app"] == "discord"
@@ -234,6 +236,18 @@ class TestReminders:
         assert set(rows) == {"water plants", "bins"}
         assert rows["water plants"]["app"] == "line"
         assert rows["bins"]["recurrence"] is not None
+
+    async def test_series_lists_upcoming_occurrences(self, client: Client, router: Router) -> None:
+        token = await paired_token(client, router)
+        await say(router, "bins every monday at 7pm", platform="discord", user_id=OWNER_DISCORD)
+        listed = await (await client.get("/api/v1/reminders", headers=bearer(token))).json()
+        (bins,) = listed["reminders"]
+        times = [datetime.fromisoformat(t) for t in bins["upcoming"]]
+        assert len(times) == 10
+        assert bins["upcoming"][0] == bins["due_at"]
+        local = [t.astimezone(TZ) for t in times]
+        assert all(t.weekday() == 0 and (t.hour, t.minute) == (19, 0) for t in local)
+        assert all(b - a == timedelta(days=7) for a, b in pairwise(times))
 
     async def test_default_app_is_respected(self, client: Client, router: Router) -> None:
         await say(router, "/deliver line", platform="discord", user_id=OWNER_DISCORD)

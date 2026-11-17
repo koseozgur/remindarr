@@ -9,9 +9,25 @@
 APP_DISPLAY_NAME = Remind
 PRODUCT_BUNDLE_IDENTIFIER = dev.ozkose.remind
 
+// The server the pair screen starts with. Release (what an archive, and so
+// TestFlight, builds) is the real server; Debug is the local dev server, which
+// the simulator reaches on the Mac. ("//" starts a comment here, hence "$()".)
+APP_SERVER_URL_Debug = http:/$()/localhost:8787
+APP_SERVER_URL_Release = https:/$()/bot.ozkose.dev
+APP_SERVER_URL = $(APP_SERVER_URL_$(CONFIGURATION))
+
+// A device token baked in, so the owner's own builds start signed in. Only
+// Debug builds ever carry it (and the app only reads it #if DEBUG); Release
+// is always empty. The token itself lives only in Local.xcconfig.
+APP_BAKED_TOKEN_Debug = $(LOCAL_DEVICE_TOKEN)
+APP_BAKED_TOKEN = $(APP_BAKED_TOKEN_$(CONFIGURATION))
+
 // Derived; no need to touch.
 INFOPLIST_KEY_CFBundleDisplayName = $(APP_DISPLAY_NAME)
 // Shown when the app first reaches a dev server on the home Wi-Fi.
 INFOPLIST_KEY_NSLocalNetworkUsageDescription = Connects to your reminder server on this network.
 MARKETING_VERSION = 0.1
 CURRENT_PROJECT_VERSION = 1
+
+// Your own overrides, git-ignored. See Local.xcconfig.example. Last, so it wins.
+#include? "Local.xcconfig"

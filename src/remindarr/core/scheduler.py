@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from remindarr.adapters.base import DeliveryError, DeliveryRegistry
 from remindarr.config import Settings
 
-from . import service
+from . import phone, service
 from .clock import utcnow
 from .db import session_scope
 from .delivery import setter_name
@@ -112,6 +112,12 @@ class Scheduler:
                         missed_from=missed_from.isoformat(),
                         delivering_for=reminder.due_at.isoformat(),
                     )
+
+            # "Phone only", and the phone provably has this one scheduled.
+            if await phone.covers(session, reminder, now):
+                service.mark_sent(reminder, now=now)
+                log.info("delivery.phone_only", reminder_id=reminder_id)
+                return
 
             adapter = self.registry.get(reminder.delivery_platform)
             if adapter is None:

@@ -34,13 +34,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from remindarr.config import Settings
 
-from . import access, devices, service
+from . import access, devices, phone, service
 from .clock import utcnow
 from .db import session_scope
 from .directory import load as load_directory
 from .humanize import format_next, format_when
 from .models import Device, Reminder, ReminderState, Subscriber, User
-from .router import TRY_THIS, Refused, Router
+from .router import TRY_THIS, Refused, Router, choose_chat_app, describe_delivery
 from .types import IncomingMessage, Route, Sender
 
 log = structlog.get_logger(__name__)
@@ -49,6 +49,10 @@ PREFIX = "/api/v1"
 MAX_BODY_BYTES = 4096
 MAX_TEXT_CHARS = 2000
 """Discord's own message limit, so anything settable in chat fits here too."""
+
+UPCOMING = 10
+"""How many occurrences of a series ``upcoming`` lists. The app schedules phone
+notifications from them, and iOS keeps at most 64 pending across all of them."""
 
 HOME_ORDER = ("discord", "telegram", "line")
 """Which linked app an app-set reminder goes to when the user has no default.
@@ -100,6 +104,18 @@ def home_identity(
     return live[0] if live else None
 
 
+def upcoming(reminder: Reminder, limit: int = UPCOMING) -> list[datetime]:
+    """The next occurrences, starting with ``due_at``: one for a one-off."""
+    series = service.series_of(reminder)
+    times = [reminder.due_at]
+    while series is not None and len(times) < limit:
+        nxt = series.next_after(times[-1])
+        if nxt is None:
+            break
+        times.append(nxt)
+    return times
+
+
 def reminder_json(reminder: Reminder, tz: ZoneInfo, now: datetime) -> dict[str, Any]:
     series = service.series_of(reminder)
     if series is None:
@@ -110,6 +126,7 @@ def reminder_json(reminder: Reminder, tz: ZoneInfo, now: datetime) -> dict[str, 
         "id": reminder.id,
         "text": reminder.text,
         "due_at": _iso(reminder.due_at),
+        "upcoming": [_iso(t) for t in upcoming(reminder)],
         "when": when,
         "recurrence": series.describe() if series is not None else None,
         "app": reminder.delivery_platform,
@@ -141,6 +158,9 @@ class Api:
         app.router.add_post(f"{PREFIX}/reminders", self._authed(self.create_reminder))
         app.router.add_delete(f"{PREFIX}/reminders/{{id}}", self._authed(self.cancel_reminder))
         app.router.add_delete(f"{PREFIX}/devices/self", self._authed(self.sign_out))
+        app.router.add_post(f"{PREFIX}/devices/self/sync", self._authed(self.sync))
+        app.router.add_get(f"{PREFIX}/settings", self._authed(self.get_settings))
+        app.router.add_put(f"{PREFIX}/settings", self._authed(self.put_settings))
         return app
 
     # -- plumbing -----------------------------------------------------------
@@ -233,7 +253,13 @@ class Api:
         now = self._clock()
         tz = self._user_zone(await _identities(session, user.id))
         pending = await service.list_pending_for_user(session, user_id=user.id)
-        return web.json_response({"reminders": [reminder_json(r, tz, now) for r in pending]})
+        return web.json_response(
+            {
+                "reminders": [reminder_json(r, tz, now) for r in pending],
+                # Echoed back by the app's sync report: "I scheduled from this".
+                "as_of": _iso(now),
+            }
+        )
 
     async def create_reminder(
         self, request: web.Request, session: AsyncSession, device: Device, user: User
@@ -305,6 +331,91 @@ class Api:
         devices.revoke(device, now=self._clock())
         log.info("api.signed_out", user=user.name, device_id=device.id)
         return web.Response(status=204)
+
+    async def sync(
+        self, request: web.Request, session: AsyncSession, device: Device, user: User
+    ) -> web.Response:
+        """``{"as_of": <from GET /reminders>, "notifications": bool, "complete":
+        bool}``: what the app just scheduled. "Phone only" relies on it."""
+        body = await self._json_body(request)
+        if isinstance(body, web.Response):
+            return body
+        raw, notifications, complete = (
+            body.get("as_of"),
+            body.get("notifications"),
+            body.get("complete"),
+        )
+        if not (
+            isinstance(raw, str) and isinstance(notifications, bool) and isinstance(complete, bool)
+        ):
+            return _error(400, "as_of must be a string; notifications and complete booleans")
+        try:
+            as_of = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return _error(400, "as_of must be an ISO 8601 time")
+        if as_of.tzinfo is None:
+            return _error(400, "as_of needs a timezone")
+        await phone.record_sync(
+            session,
+            device,
+            as_of=as_of.astimezone(UTC),
+            notifications=notifications,
+            complete=complete,
+            now=self._clock(),
+        )
+        return web.Response(status=204)
+
+    async def _settings_json(self, session: AsyncSession, user: User) -> dict[str, Any]:
+        now = self._clock()
+        people = await load_directory(session, self._settings)
+        identities = await _identities(session, user.id)
+        return {
+            "delivery": await phone.mode_of(session, user.id),
+            "chat_app": user.deliver_on,
+            "apps": sorted(
+                {s.platform for s in identities if s.platform in people.enabled_platforms}
+            ),
+            "phone_ready": await phone.phone_ready(session, user.id, now),
+            "summary": await describe_delivery(session, user, now),
+        }
+
+    async def get_settings(
+        self, request: web.Request, session: AsyncSession, device: Device, user: User
+    ) -> web.Response:
+        return web.json_response(await self._settings_json(session, user))
+
+    async def put_settings(
+        self, request: web.Request, session: AsyncSession, device: Device, user: User
+    ) -> web.Response:
+        """``{"delivery": "chat"|"both"|"phone", "chat_app": "discord"|...|null}``,
+        either or both. The same setting as ``/deliver`` in chat."""
+        body = await self._json_body(request)
+        if isinstance(body, web.Response):
+            return body
+        mode = body.get("delivery")
+        if mode is not None and mode not in phone.MODES:
+            return _error(400, f"delivery must be one of {', '.join(phone.MODES)}")
+        if "chat_app" in body:
+            app = body["chat_app"]
+            if app is not None and not isinstance(app, str):
+                return _error(400, "chat_app must be a string or null")
+            people = await load_directory(session, self._settings)
+            identities = await _identities(session, user.id)
+            if not identities:
+                return _error(409, "You have no linked chat apps.")
+            me = identities[0]
+            error = choose_chat_app(
+                user,
+                (app or "here").lower(),
+                people,
+                Sender(me.platform, me.platform_user_id, me.display_name),
+            )
+            if error is not None:
+                return _error(422, error)
+        if mode is not None:
+            await phone.set_mode(session, user.id, mode, self._clock())
+        log.info("api.settings", user=user.name, delivery=mode, chat_app=user.deliver_on)
+        return web.json_response(await self._settings_json(session, user))
 
 
 class ApiServer:

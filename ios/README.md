@@ -1,8 +1,31 @@
 # iOS app
 
 Native SwiftUI, deliberately small: pair with the server, see your pending
-reminders, set new ones, cancel by swiping. Reminders still arrive on your
-chat app; the app doesn't deliver anything (yet).
+reminders, set new ones, cancel by swiping, and get them as phone
+notifications too. "Set a reminder" also works from Siri and Spotlight (see
+[`docs/siri-shortcut.md`](../docs/siri-shortcut.md)).
+
+## Phone notifications and where reminders arrive
+
+The menu's **Where reminders arrive** picks phone only, phone and chat, or
+chat only, plus the chat app. It's the same setting as `/deliver` in chat.
+On a fresh install everything goes to chat; once there's something in the
+list the app offers **Notify me on this phone too**, which asks iOS for
+permission and switches to phone and chat.
+
+With the phone in play, the app schedules a local notification for each of
+your own pending reminders: the next 10 occurrences of a repeating one, the
+soonest 60 in all (iOS keeps at most 64). There's no remote push (that needs
+Apple's paid program), so the phone knows only what it saw at its last
+refresh: opening the app, pull to refresh, a change made in the app or by
+Siri, or a background refresh, which iOS runs when it chooses. After each
+refresh the app tells the server what it scheduled.
+
+**Phone only** relies on that report: the server skips chat for a reminder
+only when this phone has reported having it scheduled within the last day,
+with notifications on. Anything else (one set in chat since the last
+refresh, notifications off, the app not opened for a day) still comes by
+chat. Details: `docs/design/users-and-app-api.md`.
 
 ## Renaming
 
@@ -10,6 +33,44 @@ The product name is a placeholder. The display name and bundle identifier
 live **only** in [`Config/App.xcconfig`](Config/App.xcconfig). The Xcode
 target and project are called plain `App` on purpose, so nothing else needs
 renaming.
+
+## Server address and your own builds
+
+Debug builds default to the local dev server (`http://localhost:8787`),
+Release builds (and so any archive, TestFlight included) to
+`https://bot.ozkose.dev`. Both are set in `Config/App.xcconfig`.
+
+For builds on your own iPhone that start already signed in, put a device
+token in a git-ignored `Config/Local.xcconfig`:
+
+```bash
+cp ios/Config/Local.xcconfig.example ios/Config/Local.xcconfig
+```
+
+To get a token, send `/pair` to the bot, then within ten minutes:
+
+```bash
+curl -s https://bot.ozkose.dev/api/v1/pair -H 'Content-Type: application/json' -d '{"code":"XXXX-XXXX","name":"Xcode build"}'
+```
+
+and put the reply's `token` after `LOCAL_DEVICE_TOKEN[sdk=iphoneos*] =`. (The
+token the app already holds from pairing stays in the phone's Keychain and
+can't be read out, so this is a fresh one; `/devices` lists both, and
+`/unpair` removes either.) The example file applies the server and token to
+real-iPhone builds only, so the simulator keeps using the dev server.
+
+How the token is kept out of anything shared:
+
+- `Local.xcconfig` is git-ignored. Never commit it or paste the token.
+- Only Debug builds carry it. `App.xcconfig` passes it on for Debug alone,
+  and the app reads it only `#if DEBUG`. An archive builds Release, so a
+  TestFlight or App Store build has neither the token nor the code that
+  reads it (checked: a Release build with a token in `Local.xcconfig` has an
+  empty value and no trace of the token in the binary).
+- Signing out in the app revokes that token on the server; the next launch
+  then shows the pair screen until `Local.xcconfig` gets a new one.
+
+If the Keychain already holds a pairing, that wins over the baked token.
 
 ## Running it against a local server
 

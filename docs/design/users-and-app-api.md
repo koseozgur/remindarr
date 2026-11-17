@@ -91,10 +91,12 @@ All endpoints are JSON over HTTPS behind Caddy, authenticated with
 |---|---|---|
 | POST | `/api/v1/pair` | code + device name → token (the only unauthenticated call) |
 | GET | `/api/v1/me` | user, timezone, linked apps |
-| GET | `/api/v1/reminders` | the user's pending reminders (id, text, due_at, recurrence, where) |
+| GET | `/api/v1/reminders` | the user's pending reminders (id, text, due_at, upcoming, recurrence, where) |
 | POST | `/api/v1/reminders` | `{"text": "call mum tomorrow at 9"}`, parsed by the **same** grammar (and the AI plugin later), so the app and the chat behave identically |
 | DELETE | `/api/v1/reminders/{id}` | cancel |
 | DELETE | `/api/v1/devices/self` | sign out |
+| POST | `/api/v1/devices/self/sync` | the app's report of what it scheduled (see below) |
+| GET/PUT | `/api/v1/settings` | where reminders arrive: phone, chat or both, and the chat app |
 
 It runs on **its own listener**, `REMINDARR_API_PORT` (off when unset), like
 `/healthz`, rather than on the LINE webhook's server as first planned: that
@@ -119,6 +121,45 @@ As built:
   someone could use it to block pairing for an hour, not to guess a code.
 - `/remove` deletes the user's devices; `/unpair` and sign-out set
   `revoked_at`.
+- Each reminder carries `upcoming`: its next occurrences in UTC, starting
+  with `due_at` (just that for a one-off, up to 10 for a series). The app
+  schedules phone notifications from it.
+
+### Where reminders arrive: phone, chat, or both
+
+Decided by the owner 2026-11-17. Each user picks one, in the app's settings
+or with `/deliver` in chat (one setting, stored on the server):
+
+| Mode | Phone | Chat |
+|---|---|---|
+| `chat` (default) | nothing scheduled | always |
+| `both` | always | always |
+| `phone` | always | **only when the phone isn't provably ready** |
+
+The chat app is the existing `/deliver <app>` default, unchanged.
+
+**The guard for `phone`.** Without remote push, a phone only knows what it
+saw at its last refresh, and a phone can stop working silently (app deleted,
+free-tier signing lapsed, notifications switched off). So the server skips
+chat for one occurrence only if some paired, not-signed-out device has
+reported, within the last 24 hours, all of:
+
+- notifications allowed, and nothing dropped by iOS's 64-pending cap;
+- a sync from a reminder list read *after* the reminder was created (so the
+  phone had it), and *before* the occurrence was due;
+- for a series, the occurrence is within the first 9 after that list (the
+  app schedules 10), so an hourly series past what the phone scheduled goes
+  to chat.
+
+Otherwise chat delivers as usual. So "phone only" can produce a chat message
+when the phone isn't provably ready, but never silence. Reminders someone
+else set for you aren't in your app's list, so they always come by chat.
+
+The app reports with `POST /api/v1/devices/self/sync` after every refresh:
+`{"as_of": <from GET /reminders>, "notifications": bool, "complete": bool}`.
+`GET/PUT /api/v1/settings` reads and changes the mode and chat app. Both live
+in new tables (`phone_delivery`, `device_syncs`), so an existing database
+gains them on start without a rebuild.
 
 ## Security notes
 

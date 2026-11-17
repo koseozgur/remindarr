@@ -1,0 +1,14 @@
+// Copy to Local.xcconfig (git-ignored) for builds on your own iPhone.
+//
+//   cp ios/Config/Local.xcconfig.example ios/Config/Local.xcconfig
+//
+// The "[sdk=iphoneos*]" makes each line apply to builds for a real iPhone
+// only, so the simulator keeps talking to the local dev server.
+// "//" starts a comment in this file, hence the "$()" inside URLs.
+
+// Debug builds on the phone talk to the real server.
+APP_SERVER_URL_Debug[sdk=iphoneos*] = https:/$()/bot.ozkose.dev
+
+// A device token, so the app starts signed in. How to get one: ios/README.md.
+// Never commit it. Release builds ignore it.
+LOCAL_DEVICE_TOKEN[sdk=iphoneos*] =
