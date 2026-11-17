@@ -22,13 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from remindarr.ai.reading import AiUnavailable, Reader, to_reminder
 from remindarr.config import PLATFORM_NAMES, Settings, valid_person_name
 
-from . import access, delivery, service
+from . import access, delivery, devices, service
 from .clock import utcnow
 from .db import session_scope
 from .directory import Directory, bootstrap, identity_row
 from .directory import load as load_directory
 from .humanize import format_next, format_when
-from .models import AccessCode, CodeKind, Reminder, ReminderState, Subscriber, User
+from .models import AccessCode, CodeKind, Device, Reminder, ReminderState, Subscriber, User
 from .timeparse import TimeParseError, parse
 from .types import USER_PREFIX, IncomingMessage, ParsedReminder, Reply, Route
 
@@ -52,6 +52,8 @@ Commands:
   /tz <zone>       set your timezone (e.g. /tz Asia/Tokyo)
   /deliver <app>   where reminders you set in a 1:1 chat go (or "here")
   /link            connect another app to you
+  /pair            a code to sign in to the phone app
+  /devices         paired phones; /unpair <n> signs one out
   /help            this
 """
 
@@ -59,7 +61,7 @@ ADMIN_HELP = """
 Admin:
   /invite <name>   a code for someone new to /join with
   /users           who's in
-  /remove <name>   take someone out (cancels their reminders)
+  /remove <name>   take someone out (cancels reminders, signs out devices)
 """
 
 NOT_AUTHORISED = (
@@ -68,6 +70,26 @@ NOT_AUTHORISED = (
 )
 BAD_CODE = "That code isn't valid. It may have expired or already been used."
 """Every kind of failure gets the same answer, so a guess learns nothing."""
+
+
+TRY_THIS = "Try something like “call mom tomorrow at 9”"
+"""Follows an unreadable message; chat adds “, or /help”, which the app can't use."""
+
+
+@dataclass(frozen=True, slots=True)
+class Refused:
+    reason: str
+    unreadable: bool = False
+    """No time could be read, as opposed to a routing refusal."""
+
+
+@dataclass(frozen=True, slots=True)
+class Created:
+    reminder: Reminder
+    summary: str
+    """“Got it — …” with the resolved time, as the chat reply opens."""
+    notes: tuple[str, ...]
+    """Where it will arrive, if not here, and any parser warnings."""
 
 
 @dataclass(slots=True)
@@ -142,6 +164,12 @@ class Router:
                     return await self._issue_link(session, subscriber, people, message, now)
                 case "deliver":
                     return await self._deliver(session, subscriber, people, message, rest)
+                case "pair":
+                    return await self._pair(session, subscriber, now)
+                case "devices":
+                    return await self._devices(session, subscriber, tz)
+                case "unpair":
+                    return await self._unpair(session, subscriber, rest, now)
                 case "invite" | "users" | "remove" if not is_admin:
                     return Reply(f"Only an admin can /{command}.")
                 case "invite":
@@ -163,18 +191,41 @@ class Router:
         tz: ZoneInfo,
         now: datetime,
     ) -> Reply:
+        result = await self.create(session, people, subscriber, message, text, tz, now)
+        if isinstance(result, Refused):
+            if result.unreadable:
+                return Reply(f"{result.reason}\n\n{TRY_THIS}, or /help.")
+            return Reply(result.reason)
+        lines = [result.summary, f"id {result.reminder.id}", *result.notes]
+        return Reply("\n".join(lines))
+
+    async def create(
+        self,
+        session: AsyncSession,
+        people: Directory,
+        subscriber: Subscriber,
+        message: IncomingMessage,
+        text: str,
+        tz: ZoneInfo,
+        now: datetime,
+    ) -> Created | Refused:
+        """Understand ``text`` and store the reminder, or say why not.
+
+        The one path every surface uses -- chat and the app API alike -- so
+        the app reads a message exactly as the bot would.
+        """
         # The @app override comes out before time parsing, so "@line" can never
         # be read as part of the task or the time.
         target = delivery.resolve(message, text, people)
         if isinstance(target, delivery.Refusal):
-            return Reply(target.reason)
+            return Refused(target.reason)
 
         try:
             parsed = parse(target.text, now_utc=now, tz=tz)
         except TimeParseError as exc:
             ai_parsed = await self._ask_ai(target.text, now, tz)
             if ai_parsed is None:
-                return Reply(f"{exc}.\n\nTry something like “call mom tomorrow at 9”, or /help.")
+                return Refused(f"{exc}.", unreadable=True)
             parsed = ai_parsed
 
         reminder = await service.create_reminder(
@@ -194,12 +245,12 @@ class Router:
             when = f"{series.describe()}, next: {nxt}"
         else:
             when = format_when(parsed.due_at, tz, now_utc=now)
-        lines = [f"Got it — “{parsed.text}” {when}.", f"id {reminder.id}"]
+        notes: list[str] = []
         where = delivery.disclosure(target, message.route, people, message.sender)
         if where is not None:
-            lines.append(where)
-        lines.extend(f"note: {w}" for w in parsed.warnings)
-        return Reply("\n".join(lines))
+            notes.append(where)
+        notes.extend(f"note: {w}" for w in parsed.warnings)
+        return Created(reminder, f"Got it — “{parsed.text}” {when}.", tuple(notes))
 
     async def _ask_ai(self, text: str, now: datetime, tz: ZoneInfo) -> ParsedReminder | None:
         """The AI's reading, or None to fall back on the grammar's refusal.
@@ -388,6 +439,41 @@ class Router:
             f"Send this from your other app within {minutes} minutes:\n/link {access.display(code)}"
         )
 
+    async def _pair(self, session: AsyncSession, subscriber: Subscriber, now: datetime) -> Reply:
+        assert subscriber.user_id is not None  # allowed means linked
+        code = await devices.issue_pair_code(session, user_id=subscriber.user_id, now=now)
+        minutes = int(access.PAIR_TTL.total_seconds() // 60)
+        log.info("devices.pair_code_issued", user_id=subscriber.user_id)
+        return Reply(
+            f"Code for the app: {access.display(code)}\n"
+            f"Works once, for {minutes} minutes. Don't share it: it signs the app in as you."
+        )
+
+    async def _devices(self, session: AsyncSession, subscriber: Subscriber, tz: ZoneInfo) -> Reply:
+        assert subscriber.user_id is not None
+        paired = await devices.list_devices(session, user_id=subscriber.user_id)
+        if not paired:
+            return Reply("No paired devices. /pair gives a code for the app.")
+        lines = ["Paired devices:"]
+        for n, device in enumerate(paired, start=1):
+            seen = device.last_seen_at or device.created_at
+            lines.append(f"  {n}. {device.name} — last used {seen.astimezone(tz):%Y-%m-%d}")
+        lines.append("/unpair <n> signs one out.")
+        return Reply("\n".join(lines))
+
+    async def _unpair(
+        self, session: AsyncSession, subscriber: Subscriber, arg: str, now: datetime
+    ) -> Reply:
+        assert subscriber.user_id is not None
+        paired = await devices.list_devices(session, user_id=subscriber.user_id)
+        arg = arg.strip().removeprefix("#")
+        if not arg.isdigit() or not 1 <= int(arg) <= len(paired):
+            return Reply("Which one? Use /unpair <n> — /devices shows the numbers.")
+        device = paired[int(arg) - 1]
+        devices.revoke(device, now=now)
+        log.info("devices.unpaired", user_id=subscriber.user_id, device_id=device.id)
+        return Reply(f"Signed out “{device.name}”.")
+
     async def _deliver(
         self,
         session: AsyncSession,
@@ -521,6 +607,7 @@ class Router:
                 or_(AccessCode.user_id == user.id, AccessCode.created_by == user.id)
             )
         )
+        await session.execute(delete(Device).where(Device.user_id == user.id))
         await session.delete(user)
         log.info("access.removed", user=name, cancelled=len(pending))
         return Reply(f"Removed {name}. Cancelled {len(pending)} pending reminder(s).")

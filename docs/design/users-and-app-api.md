@@ -1,7 +1,9 @@
 # Users, pairing and the app API
 
 Status: **phase 1 built** (2026-11-17): users, invites, linking, admin commands.
-Phase 2 (pairing and the app API) is not built yet. This is the server-side
+**Phase 2 server side built** (2026-11-17, not deployed): `/pair`, `/devices`,
+`/unpair`, device tokens and the v1 API, tested against a local server only.
+The SwiftUI app is scaffolded in `ios/`. The Caddy route is not added yet. This is the server-side
 foundation for the iPhone app, and it also makes family onboarding possible
 without anyone editing the VM.
 
@@ -94,8 +96,29 @@ All endpoints are JSON over HTTPS behind Caddy, authenticated with
 | DELETE | `/api/v1/reminders/{id}` | cancel |
 | DELETE | `/api/v1/devices/self` | sign out |
 
-It runs on the same aiohttp server as the LINE webhook. Caddy gains one
-route, `/api/*`, and everything else stays 404.
+It runs on **its own listener**, `REMINDARR_API_PORT` (off when unset), like
+`/healthz`, rather than on the LINE webhook's server as first planned: that
+way it works with LINE disabled, which is also what makes a local dev server
+possible. Caddy gains one route, `/api/*` to that port, and everything else
+stays 404.
+
+As built:
+
+- A reminder set in the app goes through the same `Router.create` as a chat
+  message (grammar, then the AI reader, then `@app`/`@person` routing), as
+  if sent in a 1:1 chat on the user's **home app**: their `/deliver` app,
+  else the first linked of Discord, Telegram, LINE (LINE last: its pushes
+  are metered). Answers carry the same "Got it — … tomorrow at 09:00" line.
+- `GET /reminders` lists the user's pending reminders from **all** their
+  linked apps (chat `/list` still shows only the current app's).
+- Errors are `{"error": "..."}`: 400 bad body, 401 any auth failure (one
+  body for all), 404 not found or not yours, 409 already done, 413 body over
+  4 KB, 422 unreadable reminder text, 429 too many wrong pairing codes.
+- Pairing failures are limited per remote address and overall. Behind Caddy
+  the address is Caddy's, so the overall cap (50 an hour) is what bites;
+  someone could use it to block pairing for an hour, not to guess a code.
+- `/remove` deletes the user's devices; `/unpair` and sign-out set
+  `revoked_at`.
 
 ## Security notes
 
