@@ -45,12 +45,9 @@ What that means here:
 - **Expected bill: ~¥0, at most about ¥19 in 31-day months.** 720 free IP
   hours is less than 744. LINE webhooks are tiny; egress stays far under 1 GB.
 - The disk is 20 GB `pd-standard`. Never recreate it with the default type.
-- The IP is **ephemeral**. It survives reboots but **changes on a stop/start**,
-  and the sslip.io hostname is the IP, so a stop/start breaks the LINE
-  webhook (this happened on 2026-11-17). After one: put the new
-  `<a-b-c-d>.sslip.io` in `/etc/remindarr/caddy.env`, recreate Caddy, and
-  update the Webhook URL in the LINE console. Moving to your own domain only
-  shrinks this to a DNS edit.
+- The IP is **ephemeral**. It survives reboots but **changes on a stop/start**
+  (this happened on 2026-11-17). After one, update the `bot` A record in
+  Cloudflare (DNS only) to the new IP. Nothing else changes.
   To pin it, promote it in place (same address):
   `gcloud compute addresses create remindarr-ip --addresses=<IP> --region=us-west1 --project=$P`.
   Not done yet: no Google source confirms an *attached* static address bills
@@ -340,13 +337,10 @@ Snapshots would work too, but they are not free.
 
 ## Switching to your own domain
 
-The current hostname is `34-127-102-53.sslip.io` (since 2026-11-17; it was
-`8-235-64-101` until a stop/start changed the IP), which needs no domain. The
-catch: sslip.io is not on the Public Suffix List, so every sslip.io user shares
-one Let's Encrypt limit of 50 new certificates per 7 days. Renewals are exempt,
-so this only bites on first issuance or if the `caddy-data` volume is lost.
-
-To move to your own name:
+Done 2026-11-17: the hostname is `bot.ozkose.dev`, a DNS-only (grey cloud) A
+record in Cloudflare. Before that it was `<ip>.sslip.io`, which needs no domain
+but changes with the IP, and shares one Let's Encrypt limit with every other
+sslip.io user. The steps, for the next move (e.g. to the final product name):
 
 1. Create a DNS `A` record for it pointing at the VM's IP (and, ideally,
    promote the IP to static first; see the cost model).

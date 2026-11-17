@@ -238,8 +238,9 @@ delivered.
 **Deployed (2026-11-08):** a dedicated `remindarr-*` GCP project (find it with
 `gcloud projects list`), VM `remindarr`
 (e2-micro, us-west1-b, 20 GB `pd-standard`), behind Caddy with a Let's
-Encrypt cert on an interim `<ip>.sslip.io` hostname, and only `/line/webhook`
-proxied. SSH is IAP-only. Secrets live only in `/etc/remindarr/remindarr.env`
+Encrypt cert, on `bot.ozkose.dev` since 2026-11-17 (a Cloudflare DNS-only A
+record; it was `<ip>.sslip.io` before). Caddy proxies only `/line/webhook`,
+`/healthz` and `/api/*`. SSH is IAP-only. Secrets live only in `/etc/remindarr/remindarr.env`
 (root, 0600). Runbook: `docs/deploy-gcp.md`. The LINE console points at the
 permanent URL; the dev quick tunnel is no longer needed. Both LINE and Discord
 run there.
@@ -296,9 +297,11 @@ Verified live by the owner the same day.
    the app takes a verified daily SQLite copy (keeps 14 on the VM), and an
    hourly host timer uploads new ones to a free-tier GCS bucket (30-day
    lifecycle) as a create-only service account. `/healthz` is live through
-   Caddy. **Still open: the uptime check plus email alert** (waiting on which
-   address). Lesson: a VM stop/start changes the ephemeral IP, and with it the
-   sslip.io hostname and the LINE webhook URL; it happened once already.
+   Caddy, and a Cloud Monitoring uptime check on it emails
+   remindarr@ozgurkose.com (iCloud custom-domain mail; that the address
+   exists there is unverified) after 5 minutes of failures from 2 regions.
+   Lesson: a VM stop/start changes the ephemeral IP. On `bot.ozkose.dev` the
+   fix is one DNS edit, no longer a new LINE webhook URL.
 4. **Family onboarding:** the mechanism is done (`/invite`). What's left is
    inviting real family, a live test of `@person`, a real name, and the bot's
    display names on LINE and Discord.
@@ -330,10 +333,9 @@ a link. A link that opens the app directly needs Associated Domains, which
 likely means Apple's paid program. Email may also become a sign-in route for
 the app.
 
-**Pre-family housekeeping:** pick the real name, and move the endpoint from
-sslip.io to a subdomain of one of the owner's own domains (`ozgurkose.com` or
-`ozkose.dev`, both being transferred to Cloudflare Registrar as of
-2026-11-17; one DNS A record, added by the owner).
+**Pre-family housekeeping:** pick the real name. (The endpoint moved to
+`bot.ozkose.dev` on 2026-11-17. Both domains already use Cloudflare DNS; the
+registrar transfer doesn't affect it.)
 
 Small follow-ups done on the followups branch: a LINE quota warning to admins
 at 80% of the monthly cap; `line.bad_signature` logs the real caller
