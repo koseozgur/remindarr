@@ -145,15 +145,35 @@ REMINDARR_LINE_CHANNEL_SECRET=... uv run python scripts/line_webhook_check.py ht
 ```
 
 That should print 200 for the signed payload and 401 for the wrong signature.
-Any path other than `/line/webhook` gets a 404 from Caddy.
+
+`https://<hostname>/healthz` answers 200 while the scheduler is ticking and the
+newest backup is under 49 hours old, and 503 with a `problems` list otherwise
+(also logged as `health.unhealthy`). The scheduler only counts ticks that
+succeeded, so a broken database shows up as "scheduler is not ticking". Any
+other path gets a 404 from Caddy.
 
 Both containers are `restart: unless-stopped` and Docker is enabled on boot,
 so a reboot brings everything back (verified 2026-11-08).
 
 ## Backup and restore
 
-The database is one SQLite file. Take a consistent copy with SQLite's online
-backup API, which is safe while the app is running:
+The app backs itself up: at start if the newest copy is over a day old, then
+daily. Each copy is taken with SQLite's online-backup API (safe while running),
+passes `PRAGMA integrity_check` before it gets its final name, and the newest
+14 are kept, in `/var/lib/remindarr/backups/remindarr-<UTC time>.db` on the VM.
+Look for `backup.done` / `backup.failed` in the logs.
+
+Those copies share the VM's disk, so they cover a bad deploy or a mistaken
+`/remove`, not losing the disk. To pull the newest one to your machine:
+
+```bash
+gcloud compute ssh remindarr --project=$P --zone=$Z --tunnel-through-iap \
+    --command='ls -1 /var/lib/remindarr/backups | tail -1'
+gcloud compute scp remindarr:/var/lib/remindarr/backups/<name> . \
+    --project=$P --zone=$Z --tunnel-through-iap
+```
+
+A one-off copy by hand, outside the schedule:
 
 ```bash
 gcloud compute ssh remindarr --project=$P --zone=$Z --tunnel-through-iap --command='
@@ -163,7 +183,7 @@ gcloud compute scp remindarr:/var/lib/remindarr/backup.db ./remindarr-$(date +%F
     --project=$P --zone=$Z --tunnel-through-iap
 ```
 
-To restore: `sudo docker compose stop remindarr`, copy the file over
+To restore: `sudo docker compose stop remindarr`, copy a backup over
 `/var/lib/remindarr/remindarr.db` (owned by uid 1000), remove any `-wal`/`-shm`
 files next to it, and start it again.
 
@@ -210,4 +230,6 @@ database first if you want to keep it.
 
 - Behind Caddy, `line.bad_signature` logs Caddy's container address as
   `remote`, not the caller's.
-- No automated backups. The procedure above is manual.
+- Backups don't leave the VM yet. Planned: a nightly upload to a GCS bucket
+  in the free tier, plus a Cloud Monitoring uptime check on `/healthz` with
+  an email alert.

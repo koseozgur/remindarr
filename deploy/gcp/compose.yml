@@ -22,15 +22,18 @@ services:
       REMINDARR_DATABASE_URL: sqlite+aiosqlite:////data/remindarr.db
       REMINDARR_WEBHOOK_HOST: 0.0.0.0
       REMINDARR_WEBHOOK_PORT: "8080"
+      # GET /healthz, proxied by Caddy for the external uptime check.
+      REMINDARR_HEALTH_PORT: "8081"
 
     volumes:
       # Bind mount so the database is a plain file on the VM's disk, owned by
-      # the container's uid 1000.
+      # the container's uid 1000. Nightly backups land in backups/ beside it.
       - /var/lib/remindarr:/data
 
     # Reachable by Caddy on the compose network only.
     expose:
       - "8080"
+      - "8081"
 
     logging: &logging
       driver: json-file

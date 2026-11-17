@@ -55,6 +55,10 @@ class Scheduler:
     registry: DeliveryRegistry
     clock: Callable[[], datetime] = utcnow
     """Injected so tests can pin "now" without patching the module."""
+    last_tick: datetime | None = None
+    """When a tick last finished without an error; the health check reads it.
+    A tick that fails (say, the database is gone) leaves it alone, so it
+    goes stale exactly when reminders stop going out."""
     _stop: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def run(self) -> None:
@@ -62,6 +66,7 @@ class Scheduler:
         while not self._stop.is_set():
             try:
                 await self.tick()
+                self.last_tick = self.clock()
             except Exception:
                 # A tick must never kill the loop -- a transient DB error would
                 # otherwise silently stop every future reminder.

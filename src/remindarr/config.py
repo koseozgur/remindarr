@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import zoneinfo
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -148,6 +149,17 @@ class Settings(BaseSettings):
     """Low by default: reading one message is easy, and on LINE the reply has
     to go out within about a minute."""
     ai_timeout_seconds: Annotated[float, Field(gt=0, le=50)] = 20.0
+
+    backup_dir: Path | None = None
+    """Where nightly database copies go. Unset means ``backups/`` next to the
+    database file. Only SQLite file databases are backed up."""
+    backup_keep: Annotated[int, Field(ge=1)] = 14
+    backup_interval_hours: Annotated[float, Field(gt=0)] = 24.0
+
+    health_port: Annotated[int, Field(ge=1, le=65535)] | None = None
+    """Serves ``GET /healthz`` when set: 200 while the scheduler is ticking and
+    backups are current, 503 otherwise. Unset means no health server."""
+    health_host: str = "0.0.0.0"
 
     log_level: str = "INFO"
     log_json: bool = False
