@@ -40,7 +40,7 @@ from .db import session_scope
 from .directory import load as load_directory
 from .humanize import format_next, format_when
 from .models import Device, Reminder, ReminderState, Subscriber, User
-from .router import Router
+from .router import TRY_THIS, Refused, Router
 from .types import IncomingMessage, Route, Sender
 
 log = structlog.get_logger(__name__)
@@ -265,8 +265,9 @@ class Api:
             direct=True,
         )
         result = await self._router.create(session, people, home, message, text, tz, now)
-        if isinstance(result, str):
-            return _error(422, result)
+        if isinstance(result, Refused):
+            reason = f"{result.reason}\n\n{TRY_THIS}." if result.unreadable else result.reason
+            return _error(422, reason)
         log.info("api.reminder_created", user=user.name, reminder_id=result.reminder.id)
         return web.json_response(
             {

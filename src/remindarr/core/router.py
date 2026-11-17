@@ -72,6 +72,17 @@ BAD_CODE = "That code isn't valid. It may have expired or already been used."
 """Every kind of failure gets the same answer, so a guess learns nothing."""
 
 
+TRY_THIS = "Try something like “call mom tomorrow at 9”"
+"""Follows an unreadable message; chat adds “, or /help”, which the app can't use."""
+
+
+@dataclass(frozen=True, slots=True)
+class Refused:
+    reason: str
+    unreadable: bool = False
+    """No time could be read, as opposed to a routing refusal."""
+
+
 @dataclass(frozen=True, slots=True)
 class Created:
     reminder: Reminder
@@ -181,8 +192,10 @@ class Router:
         now: datetime,
     ) -> Reply:
         result = await self.create(session, people, subscriber, message, text, tz, now)
-        if isinstance(result, str):
-            return Reply(result)
+        if isinstance(result, Refused):
+            if result.unreadable:
+                return Reply(f"{result.reason}\n\n{TRY_THIS}, or /help.")
+            return Reply(result.reason)
         lines = [result.summary, f"id {result.reminder.id}", *result.notes]
         return Reply("\n".join(lines))
 
@@ -195,7 +208,7 @@ class Router:
         text: str,
         tz: ZoneInfo,
         now: datetime,
-    ) -> Created | str:
+    ) -> Created | Refused:
         """Understand ``text`` and store the reminder, or say why not.
 
         The one path every surface uses -- chat and the app API alike -- so
@@ -205,14 +218,14 @@ class Router:
         # be read as part of the task or the time.
         target = delivery.resolve(message, text, people)
         if isinstance(target, delivery.Refusal):
-            return target.reason
+            return Refused(target.reason)
 
         try:
             parsed = parse(target.text, now_utc=now, tz=tz)
         except TimeParseError as exc:
             ai_parsed = await self._ask_ai(target.text, now, tz)
             if ai_parsed is None:
-                return f"{exc}.\n\nTry something like “call mom tomorrow at 9”, or /help."
+                return Refused(f"{exc}.", unreadable=True)
             parsed = ai_parsed
 
         reminder = await service.create_reminder(

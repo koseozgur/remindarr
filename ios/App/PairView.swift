@@ -25,6 +25,9 @@ struct PairView: View {
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
                         .font(.title3.monospaced())
+                        // The keyboard covers the Pair button, so return pairs.
+                        .submitLabel(.go)
+                        .onSubmit { Task { await pair() } }
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red) }
@@ -51,6 +54,7 @@ struct PairView: View {
     }
 
     private func pair() async {
+        guard !busy, !code.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         busy = true
         defer { busy = false }
         do {

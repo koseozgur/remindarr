@@ -257,7 +257,9 @@ class TestReminders:
             "/api/v1/reminders", headers=bearer(token), json={"text": "something someday"}
         )
         assert resp.status == 422
-        assert "error" in await resp.json()
+        error = (await resp.json())["error"]
+        assert "call mom tomorrow at 9" in error
+        assert "/help" not in error  # a chat command means nothing in the app
 
     @pytest.mark.parametrize("text", ["", "   ", None, 7, "/list"])
     async def test_bad_text(self, client: Client, router: Router, text: object) -> None:
@@ -336,3 +338,8 @@ def test_listener_ports_must_differ() -> None:
         Settings(_env_file=None, health_port=8090, api_port=8090)
     with pytest.raises(ValidationError, match="REMINDARR_WEBHOOK_PORT"):
         make_settings(api_port=8080)
+
+
+async def test_chat_keeps_its_help_hint(router: Router) -> None:
+    reply = await say(router, "something someday")
+    assert reply.endswith("“call mom tomorrow at 9”, or /help.")
