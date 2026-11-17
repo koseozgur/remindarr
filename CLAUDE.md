@@ -314,8 +314,10 @@ Verified live by the owner the same day.
    server (`scripts/dev_api.py --host 0.0.0.0 serve`) over home Wi-Fi, and a
    reminder created in the app fired on time. Gotcha: the phone's "Verify
    App" for a free-tier developer failed silently until a phone restart.
-   Next: deploy with your own domain (PRs #10 and #11 together), then local
-   notifications in the app. The app's name
+   **Live 2026-11-17:** PRs #10 and #11 deployed on `bot.ozkose.dev`, and the
+   owner's iPhone paired against production. Next: local notifications in the
+   app. TestFlight needs the paid program; defer it until family iPhones want
+   the app. The app's name
    and bundle id live only in `ios/Config/App.xcconfig`.
 6. **Lists (in the narrow form above) plus location triggers** in the native
    iOS app. Location triggers must not slide off the roadmap.
