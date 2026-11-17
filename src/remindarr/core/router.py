@@ -19,10 +19,10 @@ import structlog
 from sqlalchemy import delete, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from remindarr.ai.reading import AiUnavailable, Reader, to_reminder
+from remindarr.ai.reading import AI_NOTE, AiUnavailable, Reader, to_reminder
 from remindarr.config import PLATFORM_NAMES, Settings, valid_person_name
 
-from . import access, delivery, service
+from . import access, delivery, i18n, service
 from .clock import utcnow
 from .db import session_scope
 from .directory import Directory, bootstrap, identity_row
@@ -103,7 +103,8 @@ class Router:
                     return await self._redeem(session, message, command, rest, now)
                 identity = f"{sender.platform}:{sender.user_id}"
                 log.info("access.denied", user=identity, route=str(message.route))
-                return Reply(NOT_AUTHORISED.format(identity=identity))
+                refusal = i18n.NOT_AUTHORISED if i18n.language_of(text) == "ja" else NOT_AUTHORISED
+                return Reply(refusal.format(identity=identity))
 
             subscriber = await service.get_or_create_subscriber(
                 session,
@@ -171,11 +172,14 @@ class Router:
         if isinstance(target, delivery.Refusal):
             return Reply(target.reason)
 
+        lang = i18n.language_of(target.text)
         try:
             parsed = parse(target.text, now_utc=now, tz=tz)
         except TimeParseError as exc:
             ai_parsed = await self._ask_ai(target.text, now, tz)
             if ai_parsed is None:
+                if lang == "ja":
+                    return Reply(i18n.NOT_UNDERSTOOD)
                 return Reply(f"{exc}.\n\nTry something like “call mom tomorrow at 9”, or /help.")
             parsed = ai_parsed
 
@@ -191,16 +195,29 @@ class Router:
             recurrence=parsed.recurrence,
         )
         series = service.series_of(reminder)
-        if series is not None:
-            nxt = format_next(parsed.due_at, tz, now_utc=now)
-            when = f"{series.describe()}, next: {nxt}"
+        if lang == "ja":
+            if series is not None:
+                nxt = i18n.format_next(parsed.due_at, tz, now_utc=now)
+                lines = i18n.confirmation_series(
+                    parsed.text, i18n.describe(series), nxt, reminder.id
+                )
+            else:
+                when = i18n.format_when(parsed.due_at, tz, now_utc=now)
+                lines = i18n.confirmation(parsed.text, when, reminder.id)
         else:
-            when = format_when(parsed.due_at, tz, now_utc=now)
-        lines = [f"Got it — “{parsed.text}” {when}.", f"id {reminder.id}"]
-        where = delivery.disclosure(target, message.route, people, message.sender)
+            if series is not None:
+                nxt = format_next(parsed.due_at, tz, now_utc=now)
+                when = f"{series.describe()}, next: {nxt}"
+            else:
+                when = format_when(parsed.due_at, tz, now_utc=now)
+            lines = [f"Got it — “{parsed.text}” {when}.", f"id {reminder.id}"]
+        where = delivery.disclosure(target, message.route, people, message.sender, lang=lang)
         if where is not None:
             lines.append(where)
-        lines.extend(f"note: {w}" for w in parsed.warnings)
+        for w in parsed.warnings:
+            if lang == "ja" and w == AI_NOTE:
+                w = i18n.AI_NOTE
+            lines.append(f"note: {w}" if lang == "en" else f"※ {w}")
         return Reply("\n".join(lines))
 
     async def _ask_ai(self, text: str, now: datetime, tz: ZoneInfo) -> ParsedReminder | None:
