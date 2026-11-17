@@ -304,6 +304,11 @@ Verified live by the owner the same day.
 6. **Lists (in the narrow form above) plus location triggers** in the native
    iOS app. Location triggers must not slide off the roadmap.
 
+**To do (2026-11-17), once the v1 API is public:** a Siri Shortcut ("Dictate
+Text" → POST to the v1 API with the device token → speak the confirmation).
+It needs no app and survives the free tier's 7-day re-signing. App Intents
+inside the app can follow later.
+
 **Owner request (2026-11-17), once the app is running:** invites by
 **email** rather than a code pasted into chat. Not designed yet. It needs an
 outbound mail path (SPF/DKIM on a domain the owner controls, now on
