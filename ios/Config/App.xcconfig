@@ -11,5 +11,7 @@ PRODUCT_BUNDLE_IDENTIFIER = dev.ozkose.remind
 
 // Derived; no need to touch.
 INFOPLIST_KEY_CFBundleDisplayName = $(APP_DISPLAY_NAME)
+// Shown when the app first reaches a dev server on the home Wi-Fi.
+INFOPLIST_KEY_NSLocalNetworkUsageDescription = Connects to your reminder server on this network.
 MARKETING_VERSION = 0.1
 CURRENT_PROJECT_VERSION = 1

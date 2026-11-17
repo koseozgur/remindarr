@@ -40,9 +40,20 @@ xcodebuild -project ios/App.xcodeproj -scheme App -destination 'platform=iOS Sim
 Debug builds accept `-devPairCode XXXX-XXXX` as a launch argument, which pairs
 without typing (for scripted checks).
 
-## On your own iPhone
+## On your own iPhone (untested)
 
-Free Apple tier: set your team under Signing & Capabilities, make the bundle
-id in `App.xcconfig` unique, and run. The app then needs to be re-signed
-every 7 days. It needs an HTTPS server address: plain HTTP is allowed only to
-local addresses.
+Free Apple tier: in Xcode, target **App** → Signing & Capabilities, tick
+"Automatically manage signing" and pick your Personal Team. If Xcode says the
+bundle id is taken, change it in `App.xcconfig`. Free-tier installs expire
+after 7 days; run from Xcode again to re-sign.
+
+Against the Mac's dev server on the same Wi-Fi, start it on the LAN:
+
+```bash
+uv run python scripts/dev_api.py --host 0.0.0.0 serve
+```
+
+and in the app use `http://<the Mac's LocalHostName>.local:8787`
+(`scutil --get LocalHostName` prints the name). Plain HTTP is allowed only to
+local addresses; the real server needs HTTPS. iOS asks once for permission
+to use the local network; allow it.

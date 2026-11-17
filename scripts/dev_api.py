@@ -1,6 +1,7 @@
 """A local API server for developing the phone app. Touches no real service.
 
     uv run python scripts/dev_api.py serve      # API on http://127.0.0.1:8787
+    uv run python scripts/dev_api.py --host 0.0.0.0 serve   # also from the LAN
     uv run python scripts/dev_api.py pair       # print a pairing code
     uv run python scripts/dev_api.py chat TEXT  # say TEXT to the bot as the dev user
 
@@ -43,7 +44,7 @@ DB = Path(__file__).resolve().parent.parent / "data" / "dev" / "api-dev.db"
 DEV_USER_ID = "dev"
 
 
-def dev_settings(port: int) -> Settings:
+def dev_settings(port: int, host: str) -> Settings:
     return Settings(
         _env_file=None,  # never the real .env
         database_url=f"sqlite+aiosqlite:///{DB}",
@@ -52,7 +53,7 @@ def dev_settings(port: int) -> Settings:
         # is ever built from it; see ConsoleDelivery.
         discord_token="dev-placeholder-never-used",
         admins=f"discord:{DEV_USER_ID}",
-        api_host="127.0.0.1",
+        api_host=host,
         api_port=port,
         tick_seconds=2.0,
     )
@@ -141,6 +142,11 @@ async def serve(settings: Settings) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="0.0.0.0 to reach it from a phone on the same Wi-Fi (default: this Mac only)",
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("serve")
     sub.add_parser("pair")
@@ -148,7 +154,7 @@ def main() -> int:
     chat_p.add_argument("text", nargs="+")
     args = parser.parse_args()
 
-    settings = dev_settings(args.port)
+    settings = dev_settings(args.port, args.host)
     log_setup.configure(level="INFO", json=False)
     if args.cmd == "serve":
         asyncio.run(serve(settings))
