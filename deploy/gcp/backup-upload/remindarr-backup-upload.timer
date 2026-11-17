@@ -1,0 +1,11 @@
+[Unit]
+Description=Upload new remindarr backups to GCS, hourly
+
+[Timer]
+# Hourly is cheap: it only uploads when the app has written a new daily copy.
+OnCalendar=hourly
+RandomizedDelaySec=5m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

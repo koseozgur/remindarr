@@ -45,7 +45,12 @@ What that means here:
 - **Expected bill: ~¥0, at most about ¥19 in 31-day months.** 720 free IP
   hours is less than 744. LINE webhooks are tiny; egress stays far under 1 GB.
 - The disk is 20 GB `pd-standard`. Never recreate it with the default type.
-- The IP is **ephemeral**. It survives reboots but **changes on a stop/start**.
+- The IP is **ephemeral**. It survives reboots but **changes on a stop/start**,
+  and the sslip.io hostname is the IP, so a stop/start breaks the LINE
+  webhook (this happened on 2026-11-17). After one: put the new
+  `<a-b-c-d>.sslip.io` in `/etc/remindarr/caddy.env`, recreate Caddy, and
+  update the Webhook URL in the LINE console. Moving to your own domain only
+  shrinks this to a DNS edit.
   To pin it, promote it in place (same address):
   `gcloud compute addresses create remindarr-ip --addresses=<IP> --region=us-west1 --project=$P`.
   Not done yet: no Google source confirms an *attached* static address bills
@@ -173,6 +178,42 @@ gcloud compute scp remindarr:/var/lib/remindarr/backups/<name> . \
     --project=$P --zone=$Z --tunnel-through-iap
 ```
 
+### Off the VM: GCS
+
+Set up 2026-11-17. The bucket `gs://$P-backups` is in us-west1 (Always Free:
+5 GB-months, 5,000 uploads a month; this uses about 30 and well under 1 MB).
+It has uniform access, public access prevention enforced, and a lifecycle
+rule that deletes objects after 30 days.
+
+The VM runs as the service account `remindarr-backup@$P.iam.gserviceaccount.com`,
+which holds exactly one role, `roles/storage.objectCreator`, on that bucket
+only. It can add a backup, but it can't list, read, overwrite or delete one,
+so a compromised VM can't wipe the off-site copies. There is no key file: the
+VM gets short-lived tokens from the metadata server. Attaching it needed a VM
+stop/start (see the IP warning in the cost model).
+
+The host runs `deploy/gcp/backup-upload/` hourly, and it uploads only when the
+app has written a new copy. Install or update it:
+
+```bash
+# on the VM
+echo "REMINDARR_BACKUP_BUCKET=$P-backups" | sudo tee /etc/remindarr/backup.env
+cd /opt/remindarr/deploy/gcp/backup-upload
+sudo install -m 0755 remindarr-backup-upload.sh /usr/local/bin/remindarr-backup-upload
+sudo install -m 0644 remindarr-backup-upload.service remindarr-backup-upload.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now remindarr-backup-upload.timer
+sudo systemctl start remindarr-backup-upload.service && journalctl -u remindarr-backup-upload -n 5
+```
+
+To restore from GCS, from your machine (your account can read the bucket):
+
+```bash
+gcloud storage ls gs://$P-backups/
+gcloud storage cp gs://$P-backups/<name> .
+```
+
+then copy the file to the VM and restore it as below.
+
 A one-off copy by hand, outside the schedule:
 
 ```bash
@@ -191,7 +232,8 @@ Snapshots would work too, but they are not free.
 
 ## Switching to your own domain
 
-The current hostname is `8-235-64-101.sslip.io`, which needs no domain. The
+The current hostname is `34-127-102-53.sslip.io` (since 2026-11-17; it was
+`8-235-64-101` until a stop/start changed the IP), which needs no domain. The
 catch: sslip.io is not on the Public Suffix List, so every sslip.io user shares
 one Let's Encrypt limit of 50 new certificates per 7 days. Renewals are exempt,
 so this only bites on first issuance or if the `caddy-data` volume is lost.
@@ -230,6 +272,5 @@ database first if you want to keep it.
 
 - Behind Caddy, `line.bad_signature` logs Caddy's container address as
   `remote`, not the caller's.
-- Backups don't leave the VM yet. Planned: a nightly upload to a GCS bucket
-  in the free tier, plus a Cloud Monitoring uptime check on `/healthz` with
+- No alert yet. Planned: a Cloud Monitoring uptime check on `/healthz` with
   an email alert.
