@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import socket
 from collections.abc import AsyncIterator
@@ -20,9 +21,17 @@ import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
+from structlog.testing import capture_logs
 
 from remindarr.adapters.base import CaptureAdapter, DeliveryAdapter, DeliveryError
-from remindarr.adapters.line import MAX_MESSAGE_UTF16_UNITS, NO_SENDER_TEXT, LineAdapter, _truncate
+from remindarr.adapters.line import (
+    MAX_MESSAGE_UTF16_UNITS,
+    NO_SENDER_TEXT,
+    LineAdapter,
+    _truncate,
+    caller_address,
+)
+from remindarr.config import Settings
 from remindarr.core.types import IncomingMessage, OutgoingMessage, Reply, Route
 
 SECRET = "test-channel-secret"
@@ -560,3 +569,56 @@ async def test_start_serves_the_webhook_on_the_configured_port() -> None:
             assert (ok.status, unsigned.status) == (200, 401)
     finally:
         await adapter.stop()
+
+
+PROXY = (ipaddress.ip_network("172.28.0.0/24"),)
+
+
+class TestCallerAddress:
+    def test_forwarded_for_believed_from_the_proxy(self) -> None:
+        assert caller_address("172.28.0.5", "203.0.113.9", PROXY) == "203.0.113.9"
+
+    def test_only_the_last_hop_counts(self) -> None:
+        # Anything left of the proxy's own entry is what the client claimed.
+        assert caller_address("172.28.0.5", "1.1.1.1, 203.0.113.9", PROXY) == "203.0.113.9"
+
+    def test_forwarded_for_ignored_from_anyone_else(self) -> None:
+        assert caller_address("198.51.100.7", "203.0.113.9", PROXY) == "198.51.100.7"
+
+    def test_no_trusted_proxies_means_the_peer(self) -> None:
+        assert caller_address("172.28.0.5", "203.0.113.9", ()) == "172.28.0.5"
+
+    def test_garbage_header_falls_back_to_the_peer(self) -> None:
+        assert caller_address("172.28.0.5", "not-an-ip", PROXY) == "172.28.0.5"
+        assert caller_address("172.28.0.5", None, PROXY) == "172.28.0.5"
+
+    def test_ipv6(self) -> None:
+        net = (ipaddress.ip_network("fd00::/64"),)
+        assert caller_address("fd00::2", "2001:db8::1", net) == "2001:db8::1"
+
+
+async def test_bad_signature_logs_the_real_caller(api: FakeLineApi) -> None:
+    adapter = LineAdapter(
+        SECRET, TOKEN, path=PATH, trusted_proxies=[ipaddress.ip_network("127.0.0.0/8")]
+    )
+    client: Client = TestClient(TestServer(adapter.webhook_app(RecordingHandler())))
+    await client.start_server()
+    try:
+        with capture_logs() as logs:
+            resp = await client.post(PATH, data=b"{}", headers={"X-Forwarded-For": "203.0.113.9"})
+        assert resp.status == 401
+        [entry] = [e for e in logs if e["event"] == "line.bad_signature"]
+        assert entry["remote"] == "203.0.113.9"
+    finally:
+        await client.close()
+        await adapter.stop()
+
+
+def test_trusted_proxies_setting_parses() -> None:
+    s = Settings(_env_file=None, trusted_proxies="172.28.0.0/24, ::1")
+    assert s.trusted_proxies == (
+        ipaddress.ip_network("172.28.0.0/24"),
+        ipaddress.ip_network("::1"),
+    )
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, trusted_proxies="not-a-net")

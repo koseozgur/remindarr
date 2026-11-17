@@ -8,6 +8,7 @@ startup error rather than a silently disabled platform.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import zoneinfo
 from dataclasses import dataclass
@@ -109,6 +110,12 @@ class Settings(BaseSettings):
     webhook_host: str = "0.0.0.0"
     webhook_port: Annotated[int, Field(ge=1, le=65535)] = 8080
     line_webhook_path: str = "/line/webhook"
+    trusted_proxies: Annotated[
+        tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...], NoDecode
+    ] = ()
+    """CIDRs of the reverse proxy in front of the webhook, comma-separated.
+    Only a request from one of these has its ``X-Forwarded-For`` believed, and
+    only for logging the caller's address. Empty trusts nobody."""
 
     tick_seconds: Annotated[float, Field(gt=0)] = 15.0
     """How often the scheduler looks for due reminders."""
@@ -286,6 +293,19 @@ class Settings(BaseSettings):
                     )
             people.append(Person(name, frozenset(identities), deliver_on))
         return tuple(people)
+
+    @field_validator("trusted_proxies", mode="before")
+    @classmethod
+    def _parse_trusted_proxies(cls, v: object) -> object:
+        """``172.28.0.0/24, ::1`` -> networks; a bare address is a /32 (or /128)."""
+        if v is None:
+            return ()
+        if not isinstance(v, str):
+            return v
+        try:
+            return tuple(ipaddress.ip_network(x.strip()) for x in v.split(",") if x.strip())
+        except ValueError as exc:
+            raise ValueError(f"trusted_proxies: {exc}") from exc
 
     @field_validator("line_webhook_path")
     @classmethod

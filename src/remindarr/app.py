@@ -55,6 +55,7 @@ def build_adapters(settings: Settings) -> list[object]:
                 host=settings.webhook_host,
                 port=settings.webhook_port,
                 path=settings.line_webhook_path,
+                trusted_proxies=settings.trusted_proxies,
             )
         )
 
